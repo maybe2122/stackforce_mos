@@ -1,6 +1,21 @@
 # deploy/real — sar_rl 适配进度
 
-> 更新于 2026-06-08
+> 更新于 2026-07-04
+
+## 2026-07-04 修复记录
+
+- **[修复] rl_deploy.py 增益语义 bug**：原实现把关节侧 `rl_kp=25` 直接当 servo 的
+  转子侧 K_P 下发（等效关节刚度 25×6.33²≈1000 N·m/rad，训练值的 40 倍，危险）。
+  现改读 `hardware.motor_kp/motor_kw`（默认 8.0/0.08，与 motor_bus.py 一致）。
+- **[新增] 电机健康监护**：FB 过温（≥80°C）/ merr≠0 → 急停；关节侧力矩
+  （FB tau × 6.33）超 `torque_limits` → 1 Hz 限频告警。
+- **[同步] torque_limits 12→16**：训练环境 `effort_limit_sim` 已上调为 16。
+- **[MuJoCo 部署测试结论]（play_mujoco.py 新增 --lin-vel-source/--imu-source/--kp/--kv/--settle）**：
+  - 训练增益 kp=25 在 MuJoCo 下撑不住 11.7 kg 自重（静差≈τ/kp≈0.3 rad），四连杆
+    穿过奇异点翻进折叠装配分支（真机有物理限位不会），无法用于验证策略；
+  - 部署增益 kp≈320（=8×6.33²）站立正常（0.266 m），但策略按 kp=25 动力学训练，
+    接管后 0.12 s 内摔倒——**增益失配是硬阻塞**，需按可部署增益重训；
+  - lin_vel=0 / IMU stub 的受限观测使结果进一步恶化。三种观测配置均无法行走。
 
 ---
 

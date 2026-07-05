@@ -53,6 +53,7 @@ MOTOR_CTRL = str(REPO_ROOT / "motor_control" / "Linux" / "build" / "motor_ctrl")
 GEAR_RATIO = 6.33
 CTRL_HZ = 50
 CTRL_DT = 1.0 / CTRL_HZ
+MAX_MOTOR_TEMP = 80  # °C，GO-M8010-6 过温急停阈值
 
 # policy 关节顺序（与 mos2026_2.yaml joint_names 一致）
 JOINT_NAMES_POLICY = [
@@ -197,13 +198,19 @@ class RLDeploy:
         self.clip_lo = np.array(cfg["clip_actions_lower"], dtype=np.float32)
         self.clip_hi = np.array(cfg["clip_actions_upper"], dtype=np.float32)
         self.clip_obs = float(cfg.get("clip_obs", 100.0))
+        # 关节侧力矩上限（= 训练 effort_limit_sim）。超限说明真机动力学已经
+        # 偏离训练分布，只告警不截断——位置伺服无法直接限力矩，截断目标角反而危险。
+        self.torque_limits = np.array(
+            cfg.get("torque_limits", [16.0] * NUM_DOFS), dtype=np.float32)
 
-        # K_P/K_W 直接用 rl_kp/rl_kd（与训练 stiffness/damping 同数值，SDK 单位一致）
-        rl_kp = np.array(cfg["rl_kp"], dtype=np.float32)
-        rl_kd = np.array(cfg["rl_kd"], dtype=np.float32)
-        # 各关节增益相同时取第一个即可；如不同则 servo 进程需按关节下发（当前结构已支持 t_ff 扩展）
-        self._kp = float(rl_kp[0])
-        self._kw = float(rl_kd[0])
+        # K_P/K_W 必须用 hardware.motor_kp/motor_kw（转子侧），不能用 rl_kp/rl_kd！
+        # motor_ctrl servo 的 kp/kw 写进 Unitree SDK 的 cmd.K_P/K_W，作用在【转子侧】：
+        # 若直接下发关节侧 rl_kp=25，等效关节刚度 = 25*6.33^2 ≈ 1000 N·m/rad，
+        # 是训练值(25)的 40 倍，极硬且危险。换算关系见 yaml hardware 块注释：
+        #   精确复现训练关节刚度: motor_kp = rl_kp/N^2 ≈ 0.62（可能软到撑不住）
+        #   已验证可站立的保守值: motor_kp = 8.0（默认）
+        self._kp = float(hw.get("motor_kp", 8.0))
+        self._kw = float(hw.get("motor_kw", 0.08))
 
         self._imu_source = hw.get("imu_source", "stub")
         self._lin_vel_source = hw.get("lin_vel_source", "zero")
@@ -238,10 +245,18 @@ class RLDeploy:
         self._policy.eval()
         print(f"[rl_deploy] policy 已加载")
 
+        # 动作低通滤波 α∈(0,1]：执行目标用 α*新动作+(1-α)*上次，1=不滤波。
+        # 只滤执行路径；obs 里的 prev_action 仍是策略原始输出（契约不变）。
+        # MuJoCo 实测 α=0.3 可明显压高频抖动（kp=320 下存活 0.12s→1.32s）。
+        self._action_lpf = float(args.action_lpf)
+        self._filt_action = np.zeros(NUM_DOFS, dtype=np.float32)
+
         # 运行时状态
         self._prev_action = np.zeros(NUM_DOFS, dtype=np.float32)
         self._shutdown = threading.Event()
         self._servos: Dict[str, ServoProc] = {}
+        self._motor_fault: Optional[str] = None   # 过温/驱动错误 → 主循环急停
+        self._last_tau_warn = 0.0                 # 力矩超限告警限频（1 Hz）
 
         self._hold_secs = float(args.hold_secs)
         self._no_rl = args.no_rl
@@ -293,6 +308,18 @@ class RLDeploy:
             if fb is None:
                 no_data.append(jm.name)
                 continue
+            # 电机健康监护：过温 / 驱动错误码 → 置故障标志，主循环急停
+            if fb["temp"] >= MAX_MOTOR_TEMP or fb["merr"] != 0:
+                self._motor_fault = (
+                    f"{jm.name}(id={jm.motor_id}): temp={fb['temp']}°C merr={fb['merr']}")
+            # 关节侧力矩 = 转子侧 tau × 减速比；超训练上限说明已偏离训练分布
+            tau_joint = abs(fb["tau"]) * GEAR_RATIO
+            if tau_joint > self.torque_limits[i]:
+                now = time.monotonic()
+                if now - self._last_tau_warn > 1.0:
+                    self._last_tau_warn = now
+                    print(f"[warn] {jm.name} 关节力矩 {tau_joint:.1f} N·m "
+                          f"超训练上限 {self.torque_limits[i]:.0f} N·m")
             dof_pos[i] = jm.rotor_to_sim(fb["pos"], self.default_dof_pos[i])
             dof_vel[i] = jm.vel_rotor_to_sim(fb["vel"])
         if no_data and self._verbose:
@@ -395,6 +422,9 @@ class RLDeploy:
             dof_pos, dof_vel = self._read_joint_state()
             obs = self._build_obs(dof_pos, dof_vel)
 
+            if self._motor_fault is not None:
+                print(f"[SAFETY] 电机故障急停！{self._motor_fault}")
+                break
             if not self._is_safe(obs):
                 print("[rl_deploy] 安全急停！")
                 break
@@ -402,7 +432,9 @@ class RLDeploy:
             action = self._infer(obs)
             self._prev_action = action.copy()
 
-            rotor_targets = self._action_to_rotor(action)
+            self._filt_action = (self._action_lpf * action
+                                 + (1.0 - self._action_lpf) * self._filt_action)
+            rotor_targets = self._action_to_rotor(self._filt_action)
             self._send_rotor_targets(rotor_targets)
 
             frame += 1
@@ -442,6 +474,9 @@ def main():
                     help="RL 启动前站姿保持秒数（默认: 3.0）")
     ap.add_argument("--no_rl", action="store_true",
                     help="只保持站姿，不运行 policy（功能调试用）")
+    ap.add_argument("--action_lpf", type=float, default=1.0,
+                    help="动作低通滤波 α∈(0,1]，1=不滤波（默认）。0.3~0.5 压高频抖动；"
+                         "与 play_mujoco.py --action-lpf 同语义，先在 MuJoCo 验证再上机。")
     ap.add_argument("--max_pitch_roll", type=float, default=0.5,
                     help="姿态超限急停阈值 rad（默认: 0.5 ≈ 28°，stub IMU 下不生效）")
     ap.add_argument("--verbose", action="store_true",

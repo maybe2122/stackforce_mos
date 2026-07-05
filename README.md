@@ -18,6 +18,8 @@
 [训练参数](#-训练脚本参数) ·
 [播放结果](#-播放训练结果) ·
 [评估结果](#-评估训练结果) ·
+[步态评价](doc/步态评价指标.md) ·
+[真机部署](deploy/real/README.md) ·
 [自定义奖励](#-自定义-reward)
 
 </div>
@@ -26,37 +28,36 @@
 
 ## 📑 目录
 
-- [🤖 Mos-One SimReady](#-mos-one-simready)
-    - [闭链 USD · Isaac Lab / Isaac Sim 导出工程](#闭链-usd--isaac-lab--isaac-sim-导出工程)
-  - [📑 目录](#-目录)
-  - [🗺️ 仓库代码结构](#️-仓库代码结构)
-    - [📂 目录总览](#-目录总览)
-    - [🧩 各部分功能与后续方向](#-各部分功能与后续方向)
-  - [⚡ 一分钟上手](#-一分钟上手)
-  - [🎯 训练脚本参数](#-训练脚本参数)
-    - [🗺️ `--terrain` 选项](#️---terrain-选项)
-    - [💡 完整示例](#-完整示例)
-  - [📈 SwanLab 实验跟踪](#-swanlab-实验跟踪)
-  - [🗂️ 版本记录 \& 实验台账](#️-版本记录--实验台账)
-  - [🔍 可视化调试关节驱动](#-可视化调试关节驱动)
-  - [🛠️ 推荐环境 \& 安装](#️-推荐环境--安装)
-    - [已验证版本组合](#已验证版本组合)
-    - [🚀 一键安装](#-一键安装)
-  - [🎬 播放训练结果](#-播放训练结果)
-  - [📊 评估训练结果](#-评估训练结果)
-    - [⚙️ `eval.py` 参数](#️-evalpy-参数)
-    - [📋 指标说明](#-指标说明)
-    - [🧪 一键验证套件](#-一键验证套件)
-  - [🦿 控制栈：运动学 / 步态 / 动力学 / Sim2Real](#-控制栈运动学--步态--动力学--sim2real)
-  - [📦 闭链 USD 注意事项](#-闭链-usd-注意事项)
-  - [🏆 自定义 Reward](#-自定义-reward)
-    - [1️⃣ 编辑 Reward 实现](#1️⃣-编辑-reward-实现)
-    - [2️⃣ 调整 Reward 权重](#2️⃣-调整-reward-权重)
-  - [📌 来源](#-来源)
+| | 章节 | 内容 |
+|:--:|:---|:---|
+| 🗺️ | [仓库代码结构](#️-仓库代码结构) | [目录总览](#-目录总览) · [各部分功能与后续方向](#-各部分功能与后续方向) |
+| ⚡ | [一分钟上手](#-一分钟上手) | 装包 → 冒烟 → 训练 |
+| 🎯 | [训练脚本参数](#-训练脚本参数) | [`--terrain` 选项](#️---terrain-选项) · [完整示例](#-完整示例) |
+| 📈 | [SwanLab 实验跟踪](#-swanlab-实验跟踪) | 云端/本地看板、离线转换 |
+| 🗂️ | [版本记录 & 实验台账](#️-版本记录--实验台账) | todo / CHANGELOG / EXPERIMENTS 三层 |
+| 🔍 | [可视化调试关节驱动](#-可视化调试关节驱动) | 正弦步态肉眼检查 |
+| 🛠️ | [推荐环境 & 安装](#️-推荐环境--安装) | 已验证版本组合 · 一键安装 |
+| 🎬 | [播放训练结果](#-播放训练结果) | `play_latest.sh` · 手动选 checkpoint |
+| 📊 | [评估训练结果](#-评估训练结果) | [参数](#️-evalpy-参数) · [指标说明](#-指标说明) · [验证套件](#-一键验证套件) · [`doc/步态评价指标.md`](doc/步态评价指标.md) |
+| 🦿 | [控制栈](#-控制栈运动学--步态--动力学--sim2real) | FK/IK · 步态 · 动力学选型 · Sim2Real |
+| 📦 | [闭链 USD 注意事项](#-闭链-usd-注意事项) | 别走 URDF Converter · 移动目录后重装 |
+| 🏆 | [自定义 Reward](#-自定义-reward) | 实现 + 权重两步 |
+| 📌 | [来源](#-来源) | 资产与导出管线信息 |
 
 ---
 
 ## 🗺️ 仓库代码结构
+
+```mermaid
+flowchart LR
+    A["🟩 source/mos_one<br/>Isaac Lab 训练环境"] --> B["🟩 scripts/rsl_rl<br/>train · play · eval"]
+    B --> C["📦 deploy/real/policy_export.py<br/>TorchScript + ONNX 导出"]
+    C --> D["🟦 deploy/mujoco<br/>sim-to-sim 验证<br/>(受限观测 · 步态报告)"]
+    D --> E["🟧 deploy/real + motor_control<br/>真机 50 Hz 主控"]
+    H["🟩 him/<br/>HIM sim2real 路线"] -.并行.-> B
+    K["🟦 deploy/common<br/>经典运控层 (纯 numpy)"] -.FK/IK · 步态 · 动力学.-> D
+    K -.-> E
+```
 
 > 整条工作流：**`source/`（Isaac Lab 训练环境）→ `scripts/`（训练/播放/评估入口）→
 > `deploy/real/policy_export.py`（导出 TorchScript/ONNX）→ `deploy/mujoco/`（sim-to-sim 验证)
@@ -201,7 +202,10 @@ source/stackforce_mos/                   # 🟥 改名残留(只剩 __pycache__,
 （lin_vel/ang_vel/gravity/dof_pos/dof_vel/prev_action）、12 维关节位置目标动作、
 奖励/终止/三种地形（flat/rough/curriculum）、`EventCfg` 域随机化骨架（默认关闭）。
 
-**可继续做 / 优化**：
+<details>
+<summary><b>📋 可继续做 / 优化</b></summary>
+<br/>
+
 - **指令条件化重训（最高优先级）**：当前指令不进 obs（固定单指令训练），实测策略对
   `--cmd_vx` 完全无响应。把 vx/vy/wz 加进 observation（45→48 维）重训，才能做
   速度-力矩包络扫描、定真机可行速度上限（需同步改 `rl_deploy.py` 与 `policy_export.py`）。
@@ -209,12 +213,18 @@ source/stackforce_mos/                   # 🟥 改名残留(只剩 __pycache__,
   `reward_scales["torque"]=-2e-4` 开启、`effort_limit_sim` 12→16、`armature=0.01`
   (反射转子惯量,取自 menagerie go2 同款执行器)。重训后用 `eval_plot.py` 验证
   `fl/rl/rr_shank` 的 ≥80% 力矩饱和与 CoT 4.5 是否缓解、蹦跳步态是否消失。
+- **步态整形奖励**：奖励表没有 feet air time / 抬脚高度项、`action_rate=-0.005` 过弱，
+  实测步态高频低抬腿（见 [`doc/步态评价指标.md`](doc/步态评价指标.md) 整改对照表）。
+- **可部署增益重训**：训练 kp=25/kd=0.5 vs 真机部署 ≈320/3.2（2026-07-04 MuJoCo 实测
+  增益失配是硬阻塞，详见 `deploy/real/README.md` 修复记录）。
 - **域随机化放量训练**：`--domain_rand --obs_noise_std 0.02` 冒烟已过，跑收敛模型
   与无 DR 基线对比抗扰/泛化。
 - **地形课程真正启用**：`terrain_curriculum_enabled` 默认关闭，rough/stairs cfg
   写了但未纳入训练流程（Phase 4 实质未做）。
 - **训练侧 actuator 延迟/带宽**：评估侧已有 `--action_delay`，训练侧缺对应 EventTerm。
 - 顺手项：删除 `source/stackforce_mos/` 改名残留。
+
+</details>
 
 #### 2. 🟩 `scripts/` — 训练 / 播放 / 评估入口
 
@@ -223,7 +233,10 @@ source/stackforce_mos/                   # 🟥 改名残留(只剩 __pycache__,
 （多环境定量评估：存活/跟踪/能耗/力矩/步态/打滑 + 泛化测试矩阵）；外层是环境冒烟
 工具（`list_envs` / `inspect_usd` / `zero_agent` / `random_agent`）与一键装环境脚本。
 
-**可继续做 / 优化**：
+<details>
+<summary><b>📋 可继续做 / 优化</b></summary>
+<br/>
+
 - ☑️ **修接触阈值(2026-06-12 已落地)**：`foot_contact_height_threshold` 0.07→0.15
   （此前 shank body 中心始终高于阈值，`foot_slip` 奖励从未生效、步态指标退化）。
   重训后可用 `eval.py --foot_contact_height` 扫描微调。
@@ -231,17 +244,25 @@ source/stackforce_mos/                   # 🟥 改名残留(只剩 __pycache__,
   `deploy/common/kinematics.py` 的足端 FK，把打滑/占空比指标建立在真实足端上。
 - play/eval 与导出产物（`policy.pt`/`.onnx`）打通，做训练→部署的回归测试。
 
+</details>
+
 #### 3. 🟩 `him/` — HIM sim2real 路线（与 stock PPO 并行）
 
 HIMLoco 的 Hybrid Internal Model 移植：盲 actor（去掉 lin_vel + 6 步历史 = 270 维）、
 特权 critic（51 维含真值 base_lin_vel + 扰动）、HIM 估计器从历史估计机身速度，
 复用本工程 DirectRLEnv 不变，仅换 policy/算法/观测排布。
 
-**可继续做 / 优化**：
+<details>
+<summary><b>📋 可继续做 / 优化</b></summary>
+<br/>
+
 - **跑出第一个收敛模型**（目前只验证过 2-iter 冒烟，无收敛产物）。
-- **受限观测 MuJoCo 验证估速精度**：不喂 `qvel` 真值，检验 HIM 估计器在部署条件下的表现。
+- **受限观测 MuJoCo 验证估速精度**：不喂 `qvel` 真值，检验 HIM 估计器在部署条件下的表现
+  （`play_mujoco.py --lin-vel-source zero` 的受限观测通路已就绪）。
 - **路线定线**：stock PPO 的 obs 含特权量 `root_lin_vel_b`（真机拿不到），结构上不可
   部署——需决策转 HIM，还是给 stock 加非对称 critic + 速度估计器。
+
+</details>
 
 #### 4. 🟦 `deploy/common/` — 经典运控层（纯 numpy）
 
@@ -249,7 +270,10 @@ FK/IK/Jacobian（往返误差 1e-16）、trot 步态生成器、动力学/减速
 接近最优，力矩不足根因在 effort_limit 与驱动器电流上限）、速度→电机转速映射。
 传统控制 baseline、足端接触判定、腿式里程计估速都依赖这一层。
 
-**可继续做 / 优化**：
+<details>
+<summary><b>📋 可继续做 / 优化</b></summary>
+<br/>
+
 - **MuJoCo FK 对齐**：XML 加 foot site 后，随机关节角下 FK 足端 vs `mj_forward` 的
   `xpos` 对比，标定 `L_shank`（目前按站立几何估计 ≈0.16 m）。
 - **闭链传动标定**：「shank 电机轴角 ↔ 等效膝关节角」映射 + 约定角→sim/motor 仿射
@@ -257,25 +281,48 @@ FK/IK/Jacobian（往返误差 1e-16）、trot 步态生成器、动力学/减速
 - **gait 实际走起来**：把足端轨迹经映射下发到 MuJoCo/真机（Phase 2 传统控制 baseline）。
 - **腿式里程计**：足端 FK + 接触相位估机身线速度，给真机 `lin_vel_source="zero"` 兜底。
 
+</details>
+
 #### 5. 🟦 `deploy/mujoco/` — sim-to-sim 验证
 
-`play_mujoco.py` 在 MuJoCo 里回放 RL 策略（已支持新旧两种 checkpoint 格式，层结构从
-权重形状自动推导）；`standup_torque.py` 做蹲→站逐关节力矩/电机负载分析（图、CSV、
-慢放视频叠力矩条、SwanLab 实时上报）。
+`play_mujoco.py` 在 MuJoCo 里回放 RL 策略（新旧 checkpoint 格式均可，层结构从权重形状
+自动推导），并支持**部署条件仿真**：`--lin-vel-source zero` / `--imu-source stub` 复刻
+真机受限观测、`--kp/--kv` 模拟部署增益、`--settle` 对齐站姿保持、`--action-lpf` 动作低通、
+`--slowmo` 慢放；headless / 关窗时输出**步态量化报告**（占空比/步频/抬脚/对角同步率，
+判读标准见 [`doc/步态评价指标.md`](doc/步态评价指标.md)）。`standup_torque.py` 做蹲→站
+逐关节力矩/电机负载分析（图、CSV、慢放视频叠力矩条、SwanLab 实时上报）。
 
-**可继续做 / 优化**：
-- **去掉「假」sim2real**：当前直接读 `data.qvel` 喂机身速度（特权量），需出一版
-  「真机同款受限观测 + 估计器」的闭环验证。
+> [!WARNING]
+> 2026-07-04 实测：训练增益 kp=25 下 MuJoCo 软闭链撑不住自重、四连杆翻折叠分支，
+> 无法验证策略；部署增益 kp=320 能站但策略立即失稳（增益失配）。详见
+> `deploy/mujoco/README.md` 的测试结论。
+
+<details>
+<summary><b>📋 可继续做 / 优化</b></summary>
+<br/>
+
+- ☑️ **受限观测通路(2026-07-04 已落地)**：`--lin-vel-source zero` / `--imu-source stub`
+  可复刻真机输入；仍缺「估计器」半边——接 HIM / 腿式里程计替代喂 0。
+- **闭链刚性建模**：软 `<connect>` 在 kp=25 下会穿奇异翻分支（solref/solimp/限位均无效，
+  两分支被动角区间重叠），需模型手术或换 mjlab 刚性闭链后端。
 - **复用导出产物**：增加直接加载 `policy_export.py` 产出的 `policy.pt`/`.onnx` 的
   路径，做导出产物的 sim-to-sim 回归。
+
+</details>
 
 #### 6. 🟧 `deploy/real/` — 真机部署
 
 `rl_deploy.py`：50 Hz 确定性主控，ServoProc 封装 4 路串口、`JointMeta` 旋子↔sim 双向
-转换、45 维 obs 按训练合约组建、姿态超限急停、`--no_rl` 调试模式。`policy_export.py`：
-TorchScript + ONNX 双导出，数值一致性门 <1e-4。`config/mos2026_2.yaml`：rl_sar 兼容。
+转换、45 维 obs 按训练合约组建、姿态超限急停、电机过温/错误码急停、力矩超限告警、
+`--action_lpf` 动作低通、`--no_rl` 调试模式。`policy_export.py`：TorchScript + ONNX
+双导出，数值一致性门 <1e-4。`config/mos2026_2.yaml`：rl_sar 兼容。
+（☑️ 2026-07-04 修复了「关节侧 rl_kp 被当转子侧 K_P 下发」的 40 倍增益 bug，
+现读 `hardware.motor_kp/motor_kw`；详见 `deploy/real/README.md` 修复记录。）
 
-**可继续做 / 优化（按上机顺序）**：
+<details>
+<summary><b>📋 可继续做 / 优化（按上机顺序）</b></summary>
+<br/>
+
 - **`sim_sign` 实机逐关节验证**（yaml 全是默认值 1，上机前必做）。
 - **IMU 接入**：当前 `imu_source="stub"`（ang_vel=0、gravity=[0,0,-1]），policy 无
   姿态感知不能真正平衡；需在 `_build_obs` 扩展 serial/udp 分支。
@@ -283,18 +330,25 @@ TorchScript + ONNX 双导出，数值一致性门 <1e-4。`config/mos2026_2.yaml
 - **首次上机流程**：吊线 + `--no_rl` 验证 obs（站姿 q_sim≈0）→ 低增益低速 RL 测试。
 - **obs 单位对齐文档**：IMU 系→机体系旋转、关节顺序与 `joint_map.default.json` 对账。
 
+</details>
+
 #### 7. 🟧 `motor_control/` — 电机底层与整机标定
 
 宇树 GO-M8010-6 SDK 封装（`motor_ctrl`：驱动/读取/servo 流式位置伺服）+ 两个零依赖
 网页工具：`motor_web.py`（ID 管理、单电机驱动、扭矩监控）、`robot_web.py`（趴/站姿
 标定、单腿验证、方向验证、限速站立）。真机已能站起来。
 
-**可继续做 / 优化（力矩/电流不足专项）**：
+<details>
+<summary><b>📋 可继续做 / 优化（力矩/电流不足专项）</b></summary>
+<br/>
+
 - **驱动链路排查**：驱动器电流上限是否设低、电池/电源大负载下是否掉压限流、
   减速比/Kt 标定核对（选型分析已排除减速比问题）。
 - **重力前馈**：站立加 gravity compensation，减少纯 PD 力矩负担；复核站立姿态避免大力臂。
 - **量化闭环**：记录站立/支撑相实测力矩电流 vs 理论需求（τ_knee≈2.2 静立 / 4.5 trot），
   上调后重测站立维持 + 侧推抗扰，有余量再推进行走。
+
+</details>
 
 #### 8. 🟪 `tools/` · `doc/` · 版本记录
 
@@ -305,11 +359,16 @@ TorchScript + ONNX 双导出，数值一致性门 <1e-4。`config/mos2026_2.yaml
 `doc/`：控制栈说明、动力学/减速比
 选型、三层版本记录规范、实验台账（EXPERIMENTS.md）、问题记录、参考论文。
 
-**可继续做 / 优化**：
+<details>
+<summary><b>📋 可继续做 / 优化</b></summary>
+<br/>
+
 - 训练跑完坚持用 `tools/exp/log_run.py` 记台账，保持「todo（计划）/ CHANGELOG（里程碑）/
   EXPERIMENTS（因果）」三层闭环不断档。
 - `usd_to_mjcf.py` 与 `doc/mjlab_integration.md` 的 mjlab 路线可继续推进，作为
   Isaac 之外的第二训练后端。
+
+</details>
 
 ---
 
@@ -649,6 +708,11 @@ python scripts/rsl_rl/eval.py \
 > [!NOTE]
 > 本闭链 USD 没有接触传感器，步态指标用**足端 body 高度**近似接触判定。
 > 指令不进 observation（固定单指令训练），所以指令泛化测试是“换指令重建环境跑一遍”。
+
+> [!TIP]
+> 各步态指标的**健康区间与判读优先级**（对角同步率 → 步频 → 占空比 → 抬脚高度……）
+> 见 **[📄 doc/步态评价指标.md](doc/步态评价指标.md)**；MuJoCo 部署条件下的同款指标由
+> `deploy/mujoco/play_mujoco.py` 的 `[gait]` 报告输出，两边对照可区分「策略问题」与「sim2sim 失配」。
 
 ### 🧪 一键验证套件
 

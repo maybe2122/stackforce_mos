@@ -55,17 +55,19 @@ mos2026_2:
 
   # ----- 机上 PD（关节空间位置控制） ----------------------------------------
   # 训练用的是 ImplicitActuator stiffness=25, damping=0.5（关节侧）。
-  # 这些增益运行在 GO-M8010-6 内部（rl_deploy 会换算成转子侧 K_P/K_W）。
+  # 注意：这两组值只是训练契约的【记录】（rl_sar schema 需要），rl_deploy.py
+  # 【不会】把它们直接下发给 servo——servo 的 kp/kw 是转子侧量，实际下发的是
+  # 下方 hardware.motor_kp/motor_kw（换算关系见 hardware 块注释）。
   rl_kp: [25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0]
   rl_kd: [0.5,  0.5,  0.5,  0.5,  0.5,  0.5,  0.5,  0.5,  0.5,  0.5,  0.5,  0.5]
   # 插值进入站立姿态（起身 ramp）期间使用的更软增益。
   fixed_kp: [12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0]
   fixed_kd: [0.8,  0.8,  0.8,  0.8,  0.8,  0.8,  0.8,  0.8,  0.8,  0.8,  0.8,  0.8]
 
-  # GO-M8010-6 额定峰值为 23.7 N*m；训练时把力矩上限设为 12 N*m。我们在
-  # 12 N*m（关节侧）处做保护，使部署节点拒绝电机从未被训练过的超限指令。
-  # 详见 README 的 “torque margin”（力矩裕度）阻塞项。
-  torque_limits: [12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0]
+  # GO-M8010-6 额定峰值为 23.7 N*m；训练环境 effort_limit_sim=16.0（关节侧，
+  # 2026-06 起从 12 上调，见 mos2026_2_closed_usd_env_cfg.py）。rl_deploy 用它
+  # 对 FB 实测力矩做超限告警（换 checkpoint 时若训练上限变了，这里要跟着改）。
+  torque_limits: [16.0, 16.0, 16.0, 16.0, 16.0, 16.0, 16.0, 16.0, 16.0, 16.0, 16.0, 16.0]
 
   # ----- 默认关节姿态（弧度，策略/sim 坐标系） ------------------------------
   # = Mos20262ClosedUsdEnvCfg.init_state.joint_pos 中 12 个受控关节的值，
@@ -133,15 +135,15 @@ hardware:
   # port/motor_id 来自 motor_control/config/joint_map.default.json；
   # dir/stand_rotor 由 stand_config.json 初始化；sim_sign 默认 +1（请验证）。
   joints:
-    - {name: fl_hip,   port: /dev/ttyUSB0, id: 1,  dir: -1, stand_rotor:  3.449738, sim_sign: 1}
-    - {name: fr_hip,   port: /dev/ttyUSB1, id: 4,  dir:  1, stand_rotor:  6.963330, sim_sign: 1}
-    - {name: rl_hip,   port: /dev/ttyUSB2, id: 7,  dir:  1, stand_rotor:  4.168216, sim_sign: 1}
-    - {name: rr_hip,   port: /dev/ttyUSB3, id: 10, dir: -1, stand_rotor:  3.533338, sim_sign: 1}
-    - {name: fl_thigh, port: /dev/ttyUSB0, id: 2,  dir:  1, stand_rotor:  8.279488, sim_sign: 1}
-    - {name: fr_thigh, port: /dev/ttyUSB1, id: 5,  dir: -1, stand_rotor: -3.708211, sim_sign: 1}
-    - {name: rl_thigh, port: /dev/ttyUSB2, id: 8,  dir: -1, stand_rotor:  0.355500, sim_sign: 1}
-    - {name: rr_thigh, port: /dev/ttyUSB3, id: 11, dir:  1, stand_rotor:  5.631416, sim_sign: 1}
-    - {name: fl_shank, port: /dev/ttyUSB0, id: 3,  dir: -1, stand_rotor:  1.573288, sim_sign: 1}
-    - {name: fr_shank, port: /dev/ttyUSB1, id: 6,  dir:  1, stand_rotor:  7.890237, sim_sign: 1}
-    - {name: rl_shank, port: /dev/ttyUSB2, id: 9,  dir:  1, stand_rotor:  5.886665, sim_sign: 1}
-    - {name: rr_shank, port: /dev/ttyUSB3, id: 12, dir: -1, stand_rotor: -1.180508, sim_sign: 1}
+    - {name: fl_hip,   port: /dev/ttyUSB0, id: 1,  dir: -1, stand_rotor:  3.258374, sim_sign: 1}
+    - {name: fr_hip,   port: /dev/ttyUSB1, id: 4,  dir:  1, stand_rotor:  7.128233, sim_sign: 1}
+    - {name: rl_hip,   port: /dev/ttyUSB2, id: 7,  dir:  1, stand_rotor:  4.211551, sim_sign: 1}
+    - {name: rr_hip,   port: /dev/ttyUSB3, id: 10, dir: -1, stand_rotor:  3.568619, sim_sign: 1}
+    - {name: fl_thigh, port: /dev/ttyUSB0, id: 2,  dir:  1, stand_rotor:  8.248425, sim_sign: 1}
+    - {name: fr_thigh, port: /dev/ttyUSB1, id: 5,  dir: -1, stand_rotor: -1.561400, sim_sign: 1}
+    - {name: rl_thigh, port: /dev/ttyUSB2, id: 8,  dir: -1, stand_rotor:  0.453483, sim_sign: 1}
+    - {name: rr_thigh, port: /dev/ttyUSB3, id: 11, dir:  1, stand_rotor:  5.588272, sim_sign: 1}
+    - {name: fl_shank, port: /dev/ttyUSB0, id: 3,  dir: -1, stand_rotor:  1.384992, sim_sign: 1}
+    - {name: fr_shank, port: /dev/ttyUSB1, id: 6,  dir:  1, stand_rotor:  5.916766, sim_sign: 1}
+    - {name: rl_shank, port: /dev/ttyUSB2, id: 9,  dir:  1, stand_rotor:  5.994044, sim_sign: 1}
+    - {name: rr_shank, port: /dev/ttyUSB3, id: 12, dir: -1, stand_rotor: -1.179549, sim_sign: 1}

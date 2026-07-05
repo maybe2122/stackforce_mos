@@ -119,12 +119,12 @@
       <geom name="base_geom" type="mesh" mesh="base_mesh" class="body_visual" rgba="1 1 1 0"/>
       <geom name="base_visual" type="mesh" mesh="base_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
       <body name="FL" pos="0.378300 0.098000 0.000000" quat="1.000000 0.000000 0.000000 0.000000">
-        <joint name="fl_hip" type="hinge" pos="0.000000 0.000000 0.000000" axis="-1.000000 0.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
+        <joint name="fl_hip" type="hinge" pos="0.000000 0.000000 0.000000" axis="-1.000000 0.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true" armature="0.01"/>
         <inertial mass="0.985181" pos="-0.114293 -0.009015 -0.000144" diaginertia="0.000918 0.002659 0.002082" quat="1.000000 -0.000337 -0.000061 0.000002"/>
         <geom name="FL_geom" type="mesh" mesh="FL_mesh" class="body_visual" rgba="1 1 1 0"/>
         <geom name="FL_visual" type="mesh" mesh="FL_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
         <body name="fl_shank_link_a" pos="-0.116000 0.087150 -0.010100" quat="1.000000 0.000000 0.000000 0.000000">
-          <joint name="fl_shank_link" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 -1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
+          <joint name="fl_shank_link" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 -1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true" armature="0.01"/>
           <inertial mass="0.171588" pos="-0.029157 -0.015180 0.032474" diaginertia="0.000444 0.000444 0.000049" quat="0.933408 -0.006455 -0.358660 -0.008386"/>
           <geom name="fl_shank_link_a_geom" type="mesh" mesh="fl_shank_link_a_mesh" class="body_visual" rgba="1 1 1 0"/>
           <geom name="fl_shank_link_a_visual" type="mesh" mesh="fl_shank_link_a_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
@@ -142,7 +142,7 @@
           <geom name="fl_shank_motor_gear_visual" type="mesh" mesh="fl_shank_motor_gear_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
         </body>
         <body name="fl_thigh" pos="-0.116000 0.068150 -0.010100" quat="1.000000 0.000000 0.000000 0.000000">
-          <joint name="fl_thigh" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 -1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
+          <joint name="fl_thigh" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 -1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true" armature="0.01"/>
           <inertial mass="0.218416" pos="-0.038288 -0.006463 -0.028166" diaginertia="0.000087 0.000729 0.000667" quat="0.950074 0.003534 -0.311819 -0.010768"/>
           <geom name="fl_thigh_geom" type="mesh" mesh="fl_thigh_mesh" class="body_visual" rgba="1 1 1 0"/>
           <geom name="fl_thigh_visual" type="mesh" mesh="fl_thigh_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
@@ -177,12 +177,12 @@
         </body>
       </body>
       <body name="FR" pos="0.378300 -0.098000 0.000000" quat="1.000000 0.000000 0.000000 0.000000">
-        <joint name="fr_hip" type="hinge" pos="0.000000 0.000000 0.000000" axis="-1.000000 0.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
+        <joint name="fr_hip" type="hinge" pos="0.000000 0.000000 0.000000" axis="-1.000000 0.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true" armature="0.01"/>
         <inertial mass="0.985181" pos="-0.126572 0.005029 -0.000156" diaginertia="0.000807 0.002446 0.001967" quat="1.000000 0.000437 -0.000095 0.000042"/>
         <geom name="FR_geom" type="mesh" mesh="FR_mesh" class="body_visual" rgba="1 1 1 0"/>
         <geom name="FR_visual" type="mesh" mesh="FR_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
         <body name="fr_shank_link_a" pos="-0.116000 -0.087150 -0.010100" quat="1.000000 0.000000 0.000000 0.000000">
-          <joint name="fr_shank_link_a" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
+          <joint name="fr_shank_link_a" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true" armature="0.01"/>
           <inertial mass="0.171588" pos="-0.029256 0.015180 0.032385" diaginertia="0.000444 0.000444 0.000049" quat="0.933606 0.010405 -0.358145 -0.001902"/>
           <geom name="fr_shank_link_a_geom" type="mesh" mesh="fr_shank_link_a_mesh" class="body_visual" rgba="1 1 1 0"/>
           <geom name="fr_shank_link_a_visual" type="mesh" mesh="fr_shank_link_a_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
@@ -200,7 +200,7 @@
           <geom name="fr_shank_motor_gear_visual" type="mesh" mesh="fr_shank_motor_gear_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
         </body>
         <body name="fr_thigh" pos="-0.116000 -0.068150 -0.010100" quat="1.000000 0.000000 0.000000 0.000000">
-          <joint name="fr_thigh" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
+          <joint name="fr_thigh" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true" armature="0.01"/>
           <inertial mass="0.218416" pos="-0.038288 0.006463 -0.028167" diaginertia="0.000087 0.000729 0.000667" quat="0.950074 -0.003534 -0.311819 0.010768"/>
           <geom name="fr_thigh_geom" type="mesh" mesh="fr_thigh_mesh" class="body_visual" rgba="1 1 1 0"/>
           <geom name="fr_thigh_visual" type="mesh" mesh="fr_thigh_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
@@ -235,12 +235,12 @@
         </body>
       </body>
       <body name="RL" pos="-0.389329 0.098000 0.000000" quat="1.000000 0.000000 0.000000 0.000000">
-        <joint name="rl_hip" type="hinge" pos="0.000000 0.000000 0.000000" axis="1.000000 0.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
+        <joint name="rl_hip" type="hinge" pos="0.000000 0.000000 0.000000" axis="1.000000 0.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true" armature="0.01"/>
         <inertial mass="0.985181" pos="0.125406 -0.009015 -0.000144" diaginertia="0.000918 0.002659 0.002082" quat="1.000000 -0.000337 -0.000061 -0.000017"/>
         <geom name="RL_geom" type="mesh" mesh="RL_mesh" class="body_visual" rgba="1 1 1 0"/>
         <geom name="RL_visual" type="mesh" mesh="RL_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
         <body name="rl_shank_link_a" pos="0.127029 0.087150 -0.010100" quat="1.000000 0.000000 0.000000 0.000000">
-          <joint name="rl_shank_link_a" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 -1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
+          <joint name="rl_shank_link_a" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 -1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true" armature="0.01"/>
           <inertial mass="0.171588" pos="-0.029157 -0.015180 0.032474" diaginertia="0.000444 0.000444 0.000049" quat="0.933408 -0.006455 -0.358660 -0.008386"/>
           <geom name="rl_shank_link_a_geom" type="mesh" mesh="rl_shank_link_a_mesh" class="body_visual" rgba="1 1 1 0"/>
           <geom name="rl_shank_link_a_visual" type="mesh" mesh="rl_shank_link_a_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
@@ -258,7 +258,7 @@
           <geom name="rl_shank_motor_gear_visual" type="mesh" mesh="rl_shank_motor_gear_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
         </body>
         <body name="rl_thigh" pos="0.127029 0.087150 -0.010100" quat="1.000000 0.000000 0.000000 0.000000">
-          <joint name="rl_thigh" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 -1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
+          <joint name="rl_thigh" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 -1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true" armature="0.01"/>
           <inertial mass="0.218416" pos="-0.038288 -0.025463 -0.028166" diaginertia="0.000087 0.000729 0.000667" quat="0.950074 0.003534 -0.311819 -0.010768"/>
           <geom name="rl_thigh_geom" type="mesh" mesh="rl_thigh_mesh" class="body_visual" rgba="1 1 1 0"/>
           <geom name="rl_thigh_visual" type="mesh" mesh="rl_thigh_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
@@ -293,12 +293,12 @@
         </body>
       </body>
       <body name="RR" pos="-0.372300 -0.098000 0.000000" quat="1.000000 0.000000 0.000000 0.000000">
-        <joint name="rr_hip" type="hinge" pos="0.000000 0.000000 0.000000" axis="1.000000 0.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
+        <joint name="rr_hip" type="hinge" pos="0.000000 0.000000 0.000000" axis="1.000000 0.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true" armature="0.01"/>
         <inertial mass="0.985181" pos="0.108293 0.009015 -0.000144" diaginertia="0.000918 0.002659 0.002082" quat="1.000000 0.000337 0.000061 0.000002"/>
         <geom name="RR_geom" type="mesh" mesh="RR_mesh" class="body_visual" rgba="1 1 1 0"/>
         <geom name="RR_visual" type="mesh" mesh="RR_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
         <body name="rr_shank_link_a" pos="0.110000 -0.087150 -0.010100" quat="1.000000 0.000000 0.000000 0.000000">
-          <joint name="rr_shank_link_a" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
+          <joint name="rr_shank_link_a" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true" armature="0.01"/>
           <inertial mass="0.171588" pos="-0.029256 0.015180 0.032385" diaginertia="0.000444 0.000444 0.000049" quat="0.933606 0.010405 -0.358145 -0.001902"/>
           <geom name="rr_shank_link_a_geom" type="mesh" mesh="rr_shank_link_a_mesh" class="body_visual" rgba="1 1 1 0"/>
           <geom name="rr_shank_link_a_visual" type="mesh" mesh="rr_shank_link_a_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
@@ -316,7 +316,7 @@
           <geom name="rr_shank_motor_gear_visual" type="mesh" mesh="rr_shank_motor_gear_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
         </body>
         <body name="rr_thigh" pos="0.110000 -0.068150 -0.010100" quat="1.000000 0.000000 0.000000 0.000000">
-          <joint name="rr_thigh" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
+          <joint name="rr_thigh" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true" armature="0.01"/>
           <inertial mass="0.218416" pos="-0.038288 0.006463 -0.028167" diaginertia="0.000087 0.000729 0.000667" quat="0.950074 -0.003534 -0.311819 0.010768"/>
           <geom name="rr_thigh_geom" type="mesh" mesh="rr_thigh_mesh" class="body_visual" rgba="1 1 1 0"/>
           <geom name="rr_thigh_visual" type="mesh" mesh="rr_thigh_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
@@ -604,17 +604,17 @@
     <connect name="fr_close_loop" body1="fr_shank_link_b" body2="fr_shank" anchor="-0.107640 0.004996 -0.118510" solref="0.002 1"/>
   </equality>
   <actuator>
-    <position name="act_fl_hip" joint="fl_hip" kp="25.0" kv="0.5" forcerange="-80.0 80.0" ctrlrange="-3.14159 3.14159"/>
-    <position name="act_fr_hip" joint="fr_hip" kp="25.0" kv="0.5" forcerange="-80.0 80.0" ctrlrange="-3.14159 3.14159"/>
-    <position name="act_rl_hip" joint="rl_hip" kp="25.0" kv="0.5" forcerange="-80.0 80.0" ctrlrange="-3.14159 3.14159"/>
-    <position name="act_rr_hip" joint="rr_hip" kp="25.0" kv="0.5" forcerange="-80.0 80.0" ctrlrange="-3.14159 3.14159"/>
-    <position name="act_fl_thigh" joint="fl_thigh" kp="25.0" kv="0.5" forcerange="-80.0 80.0" ctrlrange="-3.14159 3.14159"/>
-    <position name="act_fr_thigh" joint="fr_thigh" kp="25.0" kv="0.5" forcerange="-80.0 80.0" ctrlrange="-3.14159 3.14159"/>
-    <position name="act_rl_thigh" joint="rl_thigh" kp="25.0" kv="0.5" forcerange="-80.0 80.0" ctrlrange="-3.14159 3.14159"/>
-    <position name="act_rr_thigh" joint="rr_thigh" kp="25.0" kv="0.5" forcerange="-80.0 80.0" ctrlrange="-3.14159 3.14159"/>
-    <position name="act_fl_shank_link" joint="fl_shank_link" kp="25.0" kv="0.5" forcerange="-80.0 80.0" ctrlrange="-3.14159 3.14159"/>
-    <position name="act_fr_shank_link_a" joint="fr_shank_link_a" kp="25.0" kv="0.5" forcerange="-80.0 80.0" ctrlrange="-3.14159 3.14159"/>
-    <position name="act_rl_shank_link_a" joint="rl_shank_link_a" kp="25.0" kv="0.5" forcerange="-80.0 80.0" ctrlrange="-3.14159 3.14159"/>
-    <position name="act_rr_shank_link_a" joint="rr_shank_link_a" kp="25.0" kv="0.5" forcerange="-80.0 80.0" ctrlrange="-3.14159 3.14159"/>
+    <position name="act_fl_hip" joint="fl_hip" kp="25.0" kv="0.5" forcerange="-16.0 16.0" ctrlrange="-3.14159 3.14159"/>
+    <position name="act_fr_hip" joint="fr_hip" kp="25.0" kv="0.5" forcerange="-16.0 16.0" ctrlrange="-3.14159 3.14159"/>
+    <position name="act_rl_hip" joint="rl_hip" kp="25.0" kv="0.5" forcerange="-16.0 16.0" ctrlrange="-3.14159 3.14159"/>
+    <position name="act_rr_hip" joint="rr_hip" kp="25.0" kv="0.5" forcerange="-16.0 16.0" ctrlrange="-3.14159 3.14159"/>
+    <position name="act_fl_thigh" joint="fl_thigh" kp="25.0" kv="0.5" forcerange="-16.0 16.0" ctrlrange="-3.14159 3.14159"/>
+    <position name="act_fr_thigh" joint="fr_thigh" kp="25.0" kv="0.5" forcerange="-16.0 16.0" ctrlrange="-3.14159 3.14159"/>
+    <position name="act_rl_thigh" joint="rl_thigh" kp="25.0" kv="0.5" forcerange="-16.0 16.0" ctrlrange="-3.14159 3.14159"/>
+    <position name="act_rr_thigh" joint="rr_thigh" kp="25.0" kv="0.5" forcerange="-16.0 16.0" ctrlrange="-3.14159 3.14159"/>
+    <position name="act_fl_shank_link" joint="fl_shank_link" kp="25.0" kv="0.5" forcerange="-16.0 16.0" ctrlrange="-3.14159 3.14159"/>
+    <position name="act_fr_shank_link_a" joint="fr_shank_link_a" kp="25.0" kv="0.5" forcerange="-16.0 16.0" ctrlrange="-3.14159 3.14159"/>
+    <position name="act_rl_shank_link_a" joint="rl_shank_link_a" kp="25.0" kv="0.5" forcerange="-16.0 16.0" ctrlrange="-3.14159 3.14159"/>
+    <position name="act_rr_shank_link_a" joint="rr_shank_link_a" kp="25.0" kv="0.5" forcerange="-16.0 16.0" ctrlrange="-3.14159 3.14159"/>
   </actuator>
 </mujoco>

@@ -211,9 +211,16 @@ class Mos20262ClosedUsdEnvCfg(DirectRLEnvCfg):
     # 改用动态 command、并在 _reset_idx 里随机采样指令，同时同步更新此值。
     # 每当 env.py 的 obs 拼接发生变化时都要更新此值。
     observation_space = 45
-    # 特权“仅评论家”观测维度。0 表示禁用非对称评论家；
-    # 设为 >0 并在 _get_observations 中输出 "critic" 键即可启用。
-    state_space = 0
+    # 特权“仅评论家”观测维度（非对称 actor-critic）。critic 只在训练时用，
+    # 可以看仿真里才有的真值信号，价值估计更准 → PPO 优势估计方差更小。
+    # 在 env._get_observations 中按此顺序拼接（"critic" 键）：
+    #   干净版 policy obs（无噪声，45）
+    # + base 相对地形高度 (1)
+    # + 足端相对地形高度 (4) + 足端接触状态 (4)
+    # + 受控关节实际下发力矩 applied_torque (12)
+    # = 66。设为 0 可退回对称 critic（旧 checkpoint 评估时用）。
+    # 每当 env.py 的 critic 拼接发生变化时都要更新此值。
+    state_space = 66
     # 非无头模式运行时的 GUI 相机位姿（也用于 --livestream）。`eye`
     # 为相机位置，`lookat` 为目标点，均以米为单位在世界坐标系中；
     # `resolution` 为渲染窗口尺寸。
@@ -438,6 +445,17 @@ class Mos20262ClosedUsdEnvCfg(DirectRLEnvCfg):
     visual_disable_resets = False
     commanded_lin_vel_xy = (1.0, 0.0)
     commanded_ang_vel_z = 0.0
+    # --- 命令速度课程 ---
+    # 训练早期低速命令更容易学出迈步（借鉴 robot_lab 的 command_levels 课程思路）：
+    # 命令从 start_scale 倍随 env 步数线性升到 1.0 倍，command_curriculum_steps
+    # 是升满所需的 env 步数（common_step_counter 口径：每次 env.step +1，
+    # 与并行环境数无关；默认 30000 ≈ 默认训练量 5000 iter × 24 steps 的 1/4）。
+    # 0 = 关闭。eval.py / play.py 会显式设 0，保证按全速命令评估回放。
+    # 注意 resume 训练时计数器从 0 重新开始，课程会重新爬坡一次。
+    command_curriculum_steps = 30000
+    command_curriculum_start_scale = 0.4
+    # feet_air_time 奖励的期望腾空时长（秒）：落地时结算 (腾空时长 - 该值)。
+    feet_air_time_threshold = 0.4
     show_velocity_arrows = True
     # 从 0.15 抬到 0.22：避免机器人"趴下"后（base 高度 0.10-0.18 m 之间）
     # 还在持续薅 alive / orientation 奖励。低于这个高度就判终止。
@@ -483,18 +501,27 @@ class Mos20262ClosedUsdEnvCfg(DirectRLEnvCfg):
         # 对角 trot 步态对称奖励：惩罚"对角两腿同相位"的程度
         # （详见 env._compute_gait_symmetry 与 diag1/diag2 配置注释）。
         # trot 时 paired_sum ≈ 0 拿满分；bound/pronk 这种"跳着走"会被狠扣。
-        # 权重从旧版（左右幅度差）的 -0.05 抬到 -0.5：旧版几乎不起作用
-        # （bound/pronk 都满足左右幅度相等），所以权重小没问题；新版会真的
-        # 把"跳着走"扣分扣到底，权重大一点让对角对称真正参与塑形。
-        "gait_symmetry": -0.5,
+        # 2026-07-05 从 -0.5 降到 -0.25：正向引导交给下面新增的
+        # feet_gait / feet_air_time，这里只保留兜底惩罚，避免惩罚主导
+        # 让策略不敢探索。
+        "gait_symmetry": -0.25,
         # 同端两脚同步抬落地的惩罚（bound/pronk 的直接物理特征）。
         # gait_symmetry 是关节空间静态姿态对称；anti_bound 是脚的 z 速度
         # 动态同步检测——前左+前右脚一起向上/向下时触发，后对同理。
         # 单脚 |v_z| 上限 5 m/s，pair 求和后单步最坏 (2*5)² *2 = 200，
         # clamp 到 100；正常 trot 时这一项 ≪ 1 几乎没代价。
-        # 用 -1.0 比 gait_symmetry 还重，因为这是用户明确点名要"增大"的项：
-        # 它直接看脚的运动相位，比关节空间对称项更难被"用别的关节代偿"绕过。
-        "anti_bound": -1.0,
+        # 2026-07-05 从 -1.0 降到 -0.5：理由同 gait_symmetry——好步态由
+        # 正向项奖励，坏步态惩罚只做兜底。
+        "anti_bound": -0.5,
+        # --- 正向步态引导（移植自 robot_lab / IsaacLab velocity 任务）---
+        # feet_air_time：落地瞬间结算 (腾空时长 - feet_air_time_threshold)，
+        # 鼓励迈出有明显腾空期的步子；拖地滑步拿 0 分甚至负分。
+        # 与惩罚项相反，它告诉策略"该怎么走"，给探索指方向。
+        "feet_air_time": 0.25,
+        # feet_gait：对角脚 (FL,RR)/(FR,RL) 接触状态一致且前左/前右反相时
+        # 每步 +1（binary），直接正向奖励 trot 模式；robot_lab Go2 同款思路
+        # （其 feet_gait 权重 0.5，track 3.0；这里 track 6.0，等比放大到 1.0）。
+        "feet_gait": 1.0,
         # 力矩惩罚 sum(τ²)（custom_rewards.py 计算）。2026-06-12 起默认 -2e-4 开启
         # （此前 0.0 关闭）：评估显示策略「贴力矩上限硬走」（shank 83~84% 时间 ≥90%
         # 上限）、CoT 4.5——是真机力矩/电流不足在仿真侧的同源表现；蹦跳步态的高峰值

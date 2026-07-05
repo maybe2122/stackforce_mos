@@ -29,6 +29,9 @@ parser.add_argument(
         "or 'curriculum' (start flat, progress to rough + stairs as envs succeed)."
     ),
 )
+parser.add_argument("--no_privileged_critic", action="store_true",
+                    help="关闭非对称 critic 特权观测（state_space=0）。回放 2026-07-05 之前"
+                         "训练的旧 checkpoint（对称 critic）时必须加此参数，否则维度不匹配。")
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 sys.argv = [sys.argv[0]] + hydra_args
@@ -190,7 +193,10 @@ def _runner_expects_nested_runner():
     return 'train_cfg["runner"]' in source or "train_cfg['runner']" in source
 
 
-def to_compatible_rsl_rl_cfg(agent_cfg):
+def to_compatible_rsl_rl_cfg(agent_cfg, has_critic_obs=False):
+    # has_critic_obs：env 输出独立 "critic" 特权观测组时为 True（非对称 critic），
+    # obs_groups 的 critic 指向 "critic" 组；否则退回与 actor 共用 "policy"。
+    critic_group = ["critic"] if has_critic_obs else ["policy"]
     data = agent_cfg.to_dict() if hasattr(agent_cfg, "to_dict") else dict(agent_cfg)
     allowed_policy_keys = {
         "actor_hidden_dims", "critic_hidden_dims", "activation", "init_noise_std", "clip_actions",
@@ -211,7 +217,7 @@ def to_compatible_rsl_rl_cfg(agent_cfg):
     runner_cfg.setdefault("num_steps_per_env", getattr(agent_cfg, "num_steps_per_env", 24))
     runner_cfg.setdefault("max_iterations", getattr(agent_cfg, "max_iterations", 1500))
     runner_cfg.setdefault("save_interval", getattr(agent_cfg, "save_interval", 50))
-    runner_cfg.setdefault("obs_groups", {"policy": ["policy"], "critic": ["policy"]})
+    runner_cfg.setdefault("obs_groups", {"policy": ["policy"], "critic": critic_group})
     runner_cfg.setdefault("experiment_name", getattr(agent_cfg, "experiment_name", "mos_one"))
     runner_cfg.setdefault("run_name", getattr(agent_cfg, "run_name", ""))
     runner_cfg.setdefault("resume", getattr(agent_cfg, "resume", False))
@@ -246,7 +252,7 @@ def to_compatible_rsl_rl_cfg(agent_cfg):
         }
         runner_cfg.pop("policy_class_name", None)
         runner_cfg.pop("algorithm_class_name", None)
-        runner_cfg["obs_groups"] = {"actor": ["policy"], "critic": ["policy"], "policy": ["policy"]}
+        runner_cfg["obs_groups"] = {"actor": ["policy"], "critic": critic_group, "policy": ["policy"]}
         runner_cfg.setdefault("multi_gpu", None)
         return {**runner_cfg, "actor": actor_cfg, "critic": critic_cfg, "algorithm": algorithm_cfg}
     return {**runner_cfg, "policy": policy_cfg, "algorithm": algorithm_cfg}
@@ -258,6 +264,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlBaseRun
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
     if args_cli.disable_resets and hasattr(env_cfg, "visual_disable_resets"):
         env_cfg.visual_disable_resets = True
+    # 回放按全速命令：关闭训练用的命令速度课程。
+    if hasattr(env_cfg, "command_curriculum_steps"):
+        env_cfg.command_curriculum_steps = 0
+    # 旧 checkpoint（对称 critic）兼容：按需关闭特权观测。
+    if args_cli.no_privileged_critic and hasattr(env_cfg, "state_space"):
+        env_cfg.state_space = 0
     if args_cli.terrain == "rough":
         env_cfg.terrain.terrain_type = "generator"
         env_cfg.terrain.terrain_generator = ROUGH_TERRAIN_CFG
@@ -282,7 +294,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlBaseRun
     print(f"[INFO]: Loading model checkpoint from: {resume_path}")
     env = gym.make(args_cli.task, cfg=env_cfg)
     wrapped_env = LegacyRslRlVecEnvWrapper(env, clip_actions=getattr(agent_cfg, "clip_actions", None))
-    runner = OnPolicyRunner(wrapped_env, to_compatible_rsl_rl_cfg(agent_cfg), log_dir=None, device=env.unwrapped.device)
+    runner = OnPolicyRunner(
+        wrapped_env,
+        to_compatible_rsl_rl_cfg(agent_cfg, has_critic_obs=wrapped_env.num_privileged_obs is not None),
+        log_dir=None,
+        device=env.unwrapped.device,
+    )
     runner.load(resume_path)
     policy = runner.get_inference_policy(device=env.unwrapped.device)
     obs_dict, _ = env.reset()

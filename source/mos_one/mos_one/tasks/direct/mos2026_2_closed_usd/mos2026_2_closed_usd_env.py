@@ -51,6 +51,9 @@ class Mos20262ClosedUsdEnv(DirectRLEnv):
             key: torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
             for key in self.cfg.reward_scales.keys()
         }
+        # feet_air_time 奖励的腾空计时器（秒），每脚一列；固定 4 列与
+        # _foot_heights_and_contact 的输出对齐（脚未解析时全零、奖励为 0）。
+        self._feet_air_time = torch.zeros(self.num_envs, 4, device=self.device)
         self._cmd_vel_arrow = None
         self._actual_vel_arrow = None
 
@@ -300,7 +303,10 @@ class Mos20262ClosedUsdEnv(DirectRLEnv):
         self._ensure_velocity_arrows()
         base_pos_w = self._robot.data.root_pos_w.clone()
         base_pos_w[:, 2] += 0.35
-        cmd_xy = torch.tensor(self.cfg.commanded_lin_vel_xy, device=self.device).expand(self.num_envs, 2)
+        cmd_xy = (
+            torch.tensor(self.cfg.commanded_lin_vel_xy, device=self.device).expand(self.num_envs, 2)
+            * self._current_command_scale()
+        )
         cmd_scale, cmd_quat = self._xy_velocity_to_arrow(cmd_xy, self._cmd_vel_arrow)
         actual_xy = self._robot.data.root_lin_vel_b[:, :2]
         act_scale, act_quat = self._xy_velocity_to_arrow(actual_xy, self._actual_vel_arrow)
@@ -323,19 +329,85 @@ class Mos20262ClosedUsdEnv(DirectRLEnv):
             ],
             dim=-1,
         )
-        # 观测高斯噪声（sim2real）：模拟传感器噪声，逼策略别依赖完美观测。
-        # 默认 cfg.obs_noise_std=0 即关闭，由 train.py --obs_noise_std 开启。
-        noise_std = float(getattr(self.cfg, "obs_noise_std", 0.0))
-        if noise_std > 0.0:
-            obs = obs + noise_std * torch.randn_like(obs)
         # Closed-chain physics can occasionally produce NaN/Inf in PhysX outputs.
         # Replace with 0 so rsl_rl's check_nan doesn't abort; the matching envs
         # are flagged for reset in `_get_dones`.
         obs = torch.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0)
+        # 观测高斯噪声（sim2real）：只加在 policy obs 上，critic 始终拿干净观测
+        # （critic 只在训练时用，不部署，噪声只会拖慢价值学习）。
+        # 默认 cfg.obs_noise_std=0 即关闭，由 train.py --obs_noise_std 开启。
+        policy_obs = obs
+        noise_std = float(getattr(self.cfg, "obs_noise_std", 0.0))
+        if noise_std > 0.0:
+            policy_obs = obs + noise_std * torch.randn_like(obs)
+        observations = {"policy": policy_obs}
+        # 非对称 critic 的特权观测：干净 policy obs + 仿真真值信号。
+        # 拼接顺序/维度必须与 cfg.state_space 的注释一致（当前 66）。
+        if int(getattr(self.cfg, "state_space", 0) or 0) > 0:
+            root_height = self._robot.data.root_pos_w[:, 2:3] - self._terrain.env_origins[:, 2:3]
+            foot_height, foot_contact = self._foot_heights_and_contact()
+            tau = self._robot.data.applied_torque[:, self._actuated_joint_ids]
+            critic_obs = torch.cat(
+                [obs, root_height, foot_height, foot_contact.float(), tau],
+                dim=-1,
+            )
+            observations["critic"] = torch.nan_to_num(critic_obs, nan=0.0, posinf=0.0, neginf=0.0)
         self._previous_actions = self._actions.clone()
         if getattr(self.cfg, "show_velocity_arrows", True) and self.sim.has_gui():
             self._update_velocity_arrows()
-        return {"policy": obs}
+        return observations
+
+    def _foot_heights_and_contact(self) -> tuple[torch.Tensor, torch.Tensor]:
+        # 返回 (foot_height, contact)，各 (N, 4)，顺序 [FL, FR, RL, RR]。
+        # 接触用"相对地形原点高度低于阈值"近似（此闭链 USD 无接触传感器），
+        # 与 _compute_foot_slip 的判定口径一致。脚未解析时返回全零/全 False。
+        if not getattr(self, "_foot_body_ids", None) or len(self._foot_body_ids) < 4:
+            height = torch.zeros(self.num_envs, 4, device=self.device)
+            return height, torch.zeros(self.num_envs, 4, dtype=torch.bool, device=self.device)
+        foot_pos_w = torch.nan_to_num(
+            self._robot.data.body_pos_w[:, self._foot_body_ids, :], nan=0.0, posinf=0.0, neginf=0.0
+        )
+        foot_height = foot_pos_w[..., 2] - self._terrain.env_origins[:, 2:3]
+        threshold = float(getattr(self.cfg, "foot_contact_height_threshold", 0.06))
+        return foot_height, foot_height < threshold
+
+    def _current_command_scale(self) -> float:
+        # 命令速度课程：从 start_scale 倍命令随 env 步数线性升到 1.0 倍。
+        # common_step_counter 每次 env.step +1（与并行环境数无关）。
+        # cfg.command_curriculum_steps <= 0 时关闭；eval/play 显式设 0。
+        steps = int(getattr(self.cfg, "command_curriculum_steps", 0) or 0)
+        if steps <= 0:
+            return 1.0
+        start = float(getattr(self.cfg, "command_curriculum_start_scale", 0.4))
+        progress = min(1.0, float(self.common_step_counter) / float(steps))
+        return start + (1.0 - start) * progress
+
+    def _compute_feet_air_time(self) -> torch.Tensor:
+        # 正向步态奖励（移植自 robot_lab / IsaacLab feet_air_time）：脚落地的
+        # 那一步结算 (腾空时长 - cfg.feet_air_time_threshold)，鼓励迈出有明显
+        # 腾空期的步子；拖地滑步拿不到分，腾空过久的跳跃步态由 lin_vel_z /
+        # anti_bound 负责压制。
+        # 注意：本函数带状态（_feet_air_time 计时器），每个控制步只能调用一次。
+        _, contact = self._foot_heights_and_contact()
+        threshold = float(getattr(self.cfg, "feet_air_time_threshold", 0.4))
+        first_contact = contact & (self._feet_air_time > 0.0)
+        reward = torch.sum((self._feet_air_time - threshold) * first_contact.float(), dim=1)
+        self._feet_air_time += self.step_dt
+        self._feet_air_time *= (~contact).float()
+        # 正常步态单步只有 1-2 只脚落地、|单脚结算| < 1；clamp 挡 PhysX 抽风。
+        return torch.clamp(reward, -1.0, 1.0)
+
+    def _compute_feet_gait(self) -> torch.Tensor:
+        # 正向 trot 奖励（robot_lab feet_gait 的接触状态简化版）：对角脚
+        # (FL,RR) 与 (FR,RL) 接触状态各自一致、且前左/前右反相时每步 +1。
+        # 与 gait_symmetry / anti_bound 互补：惩罚项堵坏步态，这项奖励好步态。
+        if not getattr(self, "_foot_body_ids", None) or len(self._foot_body_ids) < 4:
+            return torch.zeros(self.num_envs, device=self.device)
+        _, contact = self._foot_heights_and_contact()
+        fl, fr, rl, rr = contact[:, 0], contact[:, 1], contact[:, 2], contact[:, 3]
+        diag_sync = (fl == rr) & (fr == rl)
+        antiphase = fl != fr
+        return (diag_sync & antiphase).float()
 
     def _compute_gait_symmetry(self) -> torch.Tensor:
         # 对角 trot 对称：把同一关节类型在两条对角线上对侧的两个关节配成一对，
@@ -454,12 +526,16 @@ class Mos20262ClosedUsdEnv(DirectRLEnv):
         foot_slip = self._compute_foot_slip()
         gait_symmetry = self._compute_gait_symmetry()
         anti_bound = self._compute_anti_bound()
+        feet_air_time = self._compute_feet_air_time()
+        feet_gait = self._compute_feet_gait()
         # Constant forward locomotion command. Without a tracking term the
         # policy converges to the "stand still" optimum allowed by the other
         # shaping terms, so add explicit xy/yaw tracking rewards.
-        cmd_xy = torch.tensor(self.cfg.commanded_lin_vel_xy, device=self.device).expand(self.num_envs, 2)
+        # 命令速度课程：训练早期按比例缩小命令（见 _current_command_scale）。
+        cmd_scale = self._current_command_scale()
+        cmd_xy = torch.tensor(self.cfg.commanded_lin_vel_xy, device=self.device).expand(self.num_envs, 2) * cmd_scale
         lin_vel_xy_err = torch.sum(torch.square(cmd_xy - root_lin_vel_b[:, :2]), dim=1)
-        ang_vel_yaw_err = torch.square(self.cfg.commanded_ang_vel_z - root_ang_vel_b[:, 2])
+        ang_vel_yaw_err = torch.square(self.cfg.commanded_ang_vel_z * cmd_scale - root_ang_vel_b[:, 2])
         tracking_sigma = float(getattr(self.cfg, "tracking_sigma", 0.25))
         rewards = {
             "alive": torch.ones(self.num_envs, device=self.device) * scales.get("alive", 0.0),
@@ -476,6 +552,8 @@ class Mos20262ClosedUsdEnv(DirectRLEnv):
             "foot_slip": foot_slip * scales.get("foot_slip", 0.0),
             "gait_symmetry": gait_symmetry * scales.get("gait_symmetry", 0.0),
             "anti_bound": anti_bound * scales.get("anti_bound", 0.0),
+            "feet_air_time": feet_air_time * scales.get("feet_air_time", 0.0),
+            "feet_gait": feet_gait * scales.get("feet_gait", 0.0),
             "track_lin_vel_xy": torch.exp(-lin_vel_xy_err / tracking_sigma) * scales.get("track_lin_vel_xy", 0.0),
             "track_ang_vel_z": torch.exp(-ang_vel_yaw_err / tracking_sigma) * scales.get("track_ang_vel_z", 0.0),
         }
@@ -506,15 +584,19 @@ class Mos20262ClosedUsdEnv(DirectRLEnv):
         gravity_z = self._robot.data.projected_gravity_b[:, 2]
         tipped_over = gravity_z > -self.cfg.fall_cos_threshold
         died = died | tipped_over
-        # Treat NaN/Inf state as a terminal condition so the env is recycled
-        # rather than silently propagating bad numbers into the policy.
+        # NaN/Inf state means the closed-chain sim blew up — a *simulator* failure,
+        # not a policy failure. Report it as truncation (time_out) instead of
+        # termination: the env still gets recycled, but PPO bootstraps the value
+        # instead of treating it as a fall the policy should be punished for.
+        # (The step reward is already zeroed in _get_rewards for these envs.)
         invalid_state = (
             ~torch.isfinite(root_pos).all(dim=-1)
             | ~torch.isfinite(self._robot.data.root_lin_vel_b).all(dim=-1)
             | ~torch.isfinite(self._robot.data.joint_pos).all(dim=-1)
             | ~torch.isfinite(self._robot.data.joint_vel).all(dim=-1)
         )
-        died = died | invalid_state
+        died = died & ~invalid_state
+        time_out = time_out | invalid_state
         return died, time_out
 
     def _reset_idx(self, env_ids: torch.Tensor | None):
@@ -527,6 +609,7 @@ class Mos20262ClosedUsdEnv(DirectRLEnv):
             self.episode_length_buf[:] = torch.randint_like(self.episode_length_buf, high=int(self.max_episode_length))
         self._actions[env_ids] = 0.0
         self._previous_actions[env_ids] = 0.0
+        self._feet_air_time[env_ids] = 0.0
         joint_pos = self._robot.data.default_joint_pos[env_ids]
         joint_vel = self._robot.data.default_joint_vel[env_ids]
         default_root_state = self._robot.data.default_root_state[env_ids]
@@ -552,7 +635,11 @@ class Mos20262ClosedUsdEnv(DirectRLEnv):
             self._robot.data.root_pos_w[env_ids, :2] - self._terrain.env_origins[env_ids, :2], dim=1
         )
         terrain_size = self.cfg.terrain.terrain_generator.size[0]
-        cmd_xy = torch.tensor(self.cfg.commanded_lin_vel_xy, device=self.device, dtype=distance_walked.dtype)
+        # 期望距离按课程缩放后的实际命令算，否则低速课程期会被全员误判降级。
+        cmd_xy = (
+            torch.tensor(self.cfg.commanded_lin_vel_xy, device=self.device, dtype=distance_walked.dtype)
+            * self._current_command_scale()
+        )
         expected_distance = torch.norm(cmd_xy) * self.max_episode_length * self.step_dt
         move_up = distance_walked > terrain_size / 2
         move_down = (distance_walked < expected_distance * 0.5) & ~move_up

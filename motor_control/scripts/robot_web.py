@@ -22,6 +22,7 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -51,6 +52,11 @@ MAX_LOG = 4000
 JOG_STEP_MAX = 10.0    # 每次微调最大角度（关节°）
 JOG_COOLDOWN = 1.0     # 两次微调最小安全间隔（s）
 JOG_VMAX = 0.1         # 微调限速（关节角速度 rad/s），越小越慢越稳
+
+# 「重锚趴姿」静止校验：间隔 REANCHOR_SETTLE 秒读两次，任一关节漂移超过
+# REANCHOR_DRIFT_MAX（关节°）判定仍在动（如小腿重力下垂未靠住限位），拒绝写入。
+REANCHOR_SETTLE = 5.0
+REANCHOR_DRIFT_MAX = 0.5
 
 
 # ----------------------------------------------------------------- 工具函数
@@ -425,6 +431,84 @@ class RobotController:
             self.append(f"  {j['name']}: 趴={pj:.2f}° 站={sj:.2f}° Δ={dj:+.2f}° {arrow}")
         return True, "配置已保存"
 
+    # -- 重锚趴姿：prone=当前读数，delta 不变，stand=prone+delta --
+    # 适用场景：编码器零点相对关节平移了（换电机、摇臂错齿等），趴→站行程本身没变。
+    # 若连杆几何变过（delta 失效），必须走完整标定（①趴 ②站 ③保存）。
+    def _reanchor_prone(self):
+        try:
+            self._reanchor_impl()
+        finally:
+            self._finish("重锚趴姿")
+
+    def _reanchor_impl(self):
+        self.append("\n" + "=" * 56)
+        self.append("[重锚] 趴姿重锚：prone=当前读数，delta 保持，stand=prone+delta")
+        cfg = self._load_config()
+        if not cfg or not cfg.get("joints"):
+            self.append(f"[拒绝] 没有可用的 {STAND_CONFIG}；重锚需要已有 delta，请先走完整标定。")
+            return
+        gear = cfg.get("gear_ratio", GEAR_RATIO)
+        names = [jt["name"] for jt in self.joints]
+        cj = {j.get("name"): j for j in cfg["joints"]}
+        lack = [n for n in names if n not in cj or cj[n].get("delta_rotor") is None]
+        if lack:
+            self.append(f"[拒绝] 以下关节缺 delta_rotor，无法重锚: {', '.join(lack)}")
+            return
+
+        self.set_status("重锚：第 1 次读取")
+        r1, ok1 = self._read_all()
+        if self.abort.is_set():
+            return
+        self.append(f"[重锚] 等待 {REANCHOR_SETTLE:.0f}s 后复读，校验姿势静止 ...")
+        self.set_status("重锚：等待姿势静止")
+        if self.abort.wait(REANCHOR_SETTLE):
+            self.append("[重锚] 收到急停/中止。")
+            return
+        self.set_status("重锚：第 2 次读取")
+        r2, ok2 = self._read_all()
+
+        dead = [n for n in names if not (ok1.get(n) and ok2.get(n))]
+        if dead:
+            self.append(f"[拒绝] 以下关节无响应: {', '.join(dead)}；请检查电机模式/接线后重试。")
+            return
+        moving = []
+        for n in names:
+            d = abs(r2[n] - r1[n]) / gear * 180.0 / math.pi
+            if d > REANCHOR_DRIFT_MAX:
+                moving.append(f"{n}({d:.2f}°/{REANCHOR_SETTLE:.0f}s)")
+        if moving:
+            self.append(f"[拒绝] 以下关节仍在动（重力下垂/被触碰）: {', '.join(moving)}")
+            self.append("       请让关节完全靠住限位/支撑面、手离开后重试。")
+            return
+
+        bak = STAND_CONFIG.replace(".json", time.strftime(".bak.%Y%m%d_%H%M%S.json"))
+        shutil.copyfile(STAND_CONFIG, bak)
+        self.append(f"[重锚] 旧配置已备份: {os.path.basename(bak)}")
+        two_pi = 2 * math.pi
+        for j in cfg["joints"]:
+            n = j["name"]
+            old_p = j.get("prone_rotor")
+            j["prone_rotor"] = round(r2[n], 6)
+            j["stand_rotor"] = round(r2[n] + j["delta_rotor"], 6)
+            if old_p is not None:
+                raw = r2[n] - old_p
+                dev = raw - round(raw / two_pi) * two_pi   # 整圈归一后的锚点移动量
+                self.append(f"  [{n}] 锚点移动 {math.degrees(dev / gear):+.2f}°(关节)")
+        cfg["calibrated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        cfg["_recalibrated_at"] = time.strftime("%Y-%m-%d %H:%M") + \
+            " 网页重锚: prone=当前确认趴姿, delta不变, stand=prone+delta"
+        with open(STAND_CONFIG, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+        with self.lock:
+            self.config = cfg
+            try:
+                self._config_mtime = os.path.getmtime(STAND_CONFIG)
+            except OSError:
+                self._config_mtime = None
+            self._refresh_phase()
+        self.append(f"[重锚] 完成，已写入 {STAND_CONFIG}。")
+        self.append("       注意：deploy/real/config/mos2026_2.yaml 的 hardware.stand_rotor 需同步更新。")
+
     # -- 单关节方向：confirm 确认 / unconfirm 取消确认 / invert 取反(翻转 delta/dir 并存盘) --
     def _set_dir(self, name, mode):
         cfg = self._load_config()
@@ -703,7 +787,14 @@ class RobotController:
         vmax_joint = float(exo.get("max_joint_vel_rad_s", ex.get("max_joint_vel_rad_s", 0.1)))
         min_dur = float(exo.get("min_duration_s", ex.get("min_duration_s", 1.0)))
         rate = float(exo.get("rate_hz", ex.get("rate_hz", 100)))
-        staged = bool(exo.get("staged", ex.get("staged", True)))
+        # 站立方式 style：staged=分段抬升(小腿→大腿→hip，降峰值电流) / sync=整机同时线性 /
+        # natural=自然站立（全身同步 + 最小加加速度 S 曲线，起停缓入缓出，更接近动物起身）。
+        # 未传 style 时退回旧的 staged 布尔开关（兼容旧配置/旧页面）。
+        style = str(exo.get("style", ex.get("style", "")) or "").strip().lower()
+        if style not in ("staged", "sync", "natural"):
+            style = "staged" if bool(exo.get("staged", ex.get("staged", True))) else "sync"
+        staged = style == "staged"
+        natural = style == "natural"
         kp = float(ex.get("k_p", 8.0)) if kp_override is None else float(kp_override)
         kw = float(ex.get("k_w", 0.1)) if kw_override is None else float(kw_override)
         # 整机统一基准前馈（页面留空则用配置 execute.t_ff，默认 0）；与每关节 t_ff 叠加
@@ -818,11 +909,13 @@ class RobotController:
         else:
             stages = [("all", list(cur.keys()))]
 
-        # 每段时长：本段位移最大的关节恰好以 vmax 运动（不足 min_dur 则取 min_dur）
+        # 每段时长：本段位移最大的关节恰好以 vmax 运动（不足 min_dur 则取 min_dur）。
+        # 自然站立走 S 曲线，峰值速度是均速的 15/8=1.875 倍，按此放大时长保证瞬时不超限速。
+        vel_scale = 1.875 if natural else 1.0
         stage_plan = []
         for jt, grp in stages:
             smax = max((abs(targets[n] - cur[n]) for n in grp), default=0.0)
-            sdur = max(min_dur, smax / vmax_rotor if vmax_rotor > 0 else min_dur)
+            sdur = max(min_dur, vel_scale * smax / vmax_rotor if vmax_rotor > 0 else min_dur)
             stage_plan.append((jt, grp, smax, sdur, max(1, int(sdur * rate))))
         total_dur = sum(s[3] for s in stage_plan)
 
@@ -836,7 +929,9 @@ class RobotController:
                         f"=> 总时长 {total_dur:.2f}s, K_P={kp} K_W={kw}{tff_note}")
         else:
             max_move = max((abs(targets[n] - cur[n]) for n in cur), default=0.0)
-            self.append(f"[轨迹] {scope}：最大位移 {max_move:.3f} rad(转子)，限速 {vmax_joint} rad/s(关节) "
+            way = ("自然站立（全身同步 + S曲线缓入缓出，峰值速度≤限速）" if natural
+                   else "整机同时（线性匀速）")
+            self.append(f"[轨迹] {scope}：{way}，最大位移 {max_move:.3f} rad(转子)，限速 {vmax_joint} rad/s(关节) "
                         f"=> 时长 {total_dur:.2f}s, K_P={kp} K_W={kw}{tff_note}")
         self.set_status(f"{scope}执行中：缓慢移动（约 {total_dur:.1f}s）")
 
@@ -867,7 +962,10 @@ class RobotController:
                         self.phase = "CONFIGURED"
                     self.set_status(f"{'坐下' if descend else '站立'}已中止")
                     return
-                a = k / Ns  # 本段 0->1 线性插值
+                a = k / Ns  # 本段时间进度 0->1
+                # 自然站立用最小加加速度(min-jerk) S 曲线 s=10a³−15a⁴+6a⁵：
+                # 起步/收尾的速度和加速度都为 0，先缓→快→缓，无顿挫，起身更像动物。
+                s = a * a * a * (10.0 + a * (6.0 * a - 15.0)) if natural else a
                 for port, jts in groups.items():
                     parts = []
                     for j in jts:
@@ -877,8 +975,8 @@ class RobotController:
                         # 站立：未轮到=趴位无前馈 / 在动=0→目标、前馈 0→满 / 完成=目标位+满前馈
                         # 坐下：未轮到=仍站位+满前馈(还撑着) / 在动=站→趴、前馈 满→0 / 完成=趴位无前馈
                         if n in grpset:                 # 本段正在移动
-                            pos = cur[n] + a * (targets[n] - cur[n])
-                            tff = ((1.0 - a) if descend else a) * tff_t.get(n, 0.0)
+                            pos = cur[n] + s * (targets[n] - cur[n])
+                            tff = ((1.0 - s) if descend else s) * tff_t.get(n, 0.0)
                         elif n in done:                 # 本段已完成
                             pos = targets[n]
                             tff = 0.0 if descend else tff_t.get(n, 0.0)
@@ -1211,6 +1309,12 @@ class RobotController:
             ok, msg = self._save_config()
             return ok, msg
 
+        if action == "reanchor_prone":
+            if busy or standing:
+                return False, "忙：请等待当前操作完成"
+            self._start_bg(self._reanchor_prone)
+            return True, "ok"
+
         if action == "sit":
             # 坐下功能暂时禁用（代码有问题）。即便绕过前端直接调 API 也一律拒绝。
             return False, "坐下功能已禁用（代码有问题，暂不可用）"
@@ -1246,8 +1350,13 @@ class RobotController:
                 exo["verify_threshold_rad"] = thr
             if tff is not None:
                 exo["t_ff"] = tff
-            # 分段开关：页面复选框，默认开（站立 小腿→大腿→hip 抬升；坐下 反序下放）
-            exo["staged"] = str(p.get("staged", "1")).strip() in ("1", "true", "True", "on")
+            # 站立方式：staged=分段(默认，站立 小腿→大腿→hip / 坐下反序) / sync=整机同时线性 /
+            # natural=自然站立(全身同步+S曲线缓入缓出)。未传 style 时兼容旧的 staged=0/1 开关。
+            style = str(p.get("style", "")).strip().lower()
+            if style in ("staged", "sync", "natural"):
+                exo["style"] = style
+            else:
+                exo["staged"] = str(p.get("staged", "1")).strip() in ("1", "true", "True", "on")
             self.abort.clear()
             t = threading.Thread(target=self._do_stand,
                                  kwargs={"kp": kp, "kw": kw, "ex_override": exo, "descend": descend},
@@ -1432,54 +1541,124 @@ PAGE = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>四足机器人操控</title>
 <style>
-  :root { --bd:#d0d4da; --fg:#222; --muted:#888; --warn:#a60; --pri:#1769d6; --ok:#2a8a3e; --bad:#d64545; }
+  /* ── 设计变量（只改样式,不改任何 id/class/JS 逻辑）─────────────────── */
+  :root {
+    --bd:#e2e7ef; --bd2:#d2d9e5; --fg:#1c2433; --muted:#7c8698;
+    --warn:#b07a10; --pri:#2f6bea; --pri2:#1e56cf; --ok:#1f8a4c; --bad:#d64545;
+    --card:#ffffff; --bg:#eef1f6;
+    --shadow:0 1px 2px rgba(16,24,40,.05), 0 6px 20px rgba(16,24,40,.06);
+    --r:14px;
+  }
   * { box-sizing: border-box; }
-  body { margin:0; padding:16px; color:var(--fg); background:#f5f6f8;
-    font-family: system-ui, -apple-system, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; }
-  h1 { font-size:18px; margin:0 0 12px; }
-  fieldset { border:1px solid var(--bd); border-radius:8px; margin:0 0 12px; padding:10px 12px; background:#fff; }
-  legend { font-weight:600; padding:0 6px; color:#555; }
+  html{ scroll-behavior:smooth; }
+  body { margin:0; padding:20px 22px 30px; color:var(--fg);
+    background:
+      radial-gradient(1100px 420px at 88% -120px, rgba(47,107,234,.10), transparent 60%),
+      radial-gradient(900px 380px at -8% -90px, rgba(31,138,76,.08), transparent 55%),
+      var(--bg);
+    background-attachment: fixed;
+    font-family: system-ui, -apple-system, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased; }
+  h1 { font-size:21px; letter-spacing:.3px; margin:2px 0 16px; }
+  .muted { color:var(--muted); }
+
+  /* ── 卡片 ── */
+  fieldset { border:1px solid var(--bd); border-radius:var(--r); margin:0 0 16px;
+    padding:14px 16px 15px; background:var(--card); box-shadow:var(--shadow); }
+  legend { font-weight:700; font-size:13px; padding:3px 12px; color:#3d4c68;
+    background:linear-gradient(180deg,#f7f9fc,#eef2f8); border:1px solid var(--bd);
+    border-radius:999px; letter-spacing:.2px; }
   .row { display:flex; flex-wrap:wrap; align-items:center; gap:8px 10px; }
-  button { padding:7px 13px; border:1px solid var(--bd); border-radius:6px; background:#fff; cursor:pointer; font-size:14px; }
-  button:hover:not(:disabled){ border-color:var(--pri); color:var(--pri); }
+
+  /* ── 按钮 ── */
+  button { padding:7px 14px; border:1px solid var(--bd2); border-radius:9px; background:#fff;
+    cursor:pointer; font-size:14px; color:var(--fg); box-shadow:0 1px 1.5px rgba(16,24,40,.06);
+    transition:border-color .15s, color .15s, box-shadow .15s, transform .06s, background .15s, opacity .15s; }
+  button:hover:not(:disabled){ border-color:var(--pri); color:var(--pri);
+    box-shadow:0 2px 10px rgba(47,107,234,.18); }
+  button:active:not(:disabled){ transform:translateY(1px); }
   button:disabled{ opacity:.45; cursor:not-allowed; }
-  button.primary{ background:var(--pri); color:#fff; border-color:var(--pri); }
-  button.stand{ background:var(--ok); color:#fff; border-color:var(--ok); font-size:16px; padding:12px 26px; }
-  button.estop{ background:var(--bad); color:#fff; border-color:var(--bad); font-weight:700; }
-  button.mini{ padding:2px 7px; font-size:12px; }
-  .pill{ font-size:12px; padding:3px 10px; border-radius:11px; background:#eee; color:#555; }
-  .pill.ok{ background:#e3f4e7; color:var(--ok); }
-  .pill.warn{ background:#fff8e1; color:var(--warn); }
-  table{ border-collapse:collapse; width:100%; font-size:13px; }
-  th,td{ border:1px solid var(--bd); padding:4px 7px; text-align:center; }
-  th{ background:#eef1f5; }
-  td.bad{ background:#fde8e8; color:var(--bad); font-weight:600; }
+  button.primary{ background:linear-gradient(180deg,var(--pri),var(--pri2)); color:#fff; border-color:var(--pri2); }
+  button.primary:hover:not(:disabled){ color:#fff; filter:brightness(1.07); box-shadow:0 3px 12px rgba(47,107,234,.35); }
+  button.stand{ background:linear-gradient(180deg,#27a35c,#1f8a4c); color:#fff; border-color:#1a7a42;
+    font-size:16px; padding:12px 26px; border-radius:12px; font-weight:600;
+    box-shadow:0 2px 10px rgba(31,138,76,.28); }
+  button.stand:hover:not(:disabled){ color:#fff; filter:brightness(1.06); box-shadow:0 4px 14px rgba(31,138,76,.38); }
+  button.estop{ background:linear-gradient(180deg,#e0524f,#cf3d3d); color:#fff; border-color:#c23636; font-weight:700; }
+  button.estop:hover:not(:disabled){ color:#fff; filter:brightness(1.06); box-shadow:0 3px 12px rgba(214,69,69,.4); }
+  button.mini{ padding:3px 9px; font-size:12px; border-radius:7px; }
+
+  /* ── 表单控件（输入框多为内联样式,这里补 select 基础样式与统一焦点态）── */
+  select { padding:6px 9px; border:1px solid var(--bd2); border-radius:8px; background:#fff;
+    font-size:13.5px; color:var(--fg); cursor:pointer; }
+  input[type=number]:focus, select:focus, input[type=checkbox]:focus-visible {
+    outline:none; border-color:var(--pri) !important;
+    box-shadow:0 0 0 3px rgba(47,107,234,.15); }
+  input[type=checkbox]{ accent-color:var(--pri); }
+  label{ font-size:13.5px; }
+
+  /* ── 徽标 ── */
+  .pill{ font-size:12px; padding:4px 12px; border-radius:999px; background:#eef1f6;
+    color:#5a6577; border:1px solid var(--bd); font-weight:500; }
+  .pill.ok{ background:#e5f6ec; color:var(--ok); border-color:#c4e8d2; }
+  .pill.warn{ background:#fdf5e0; color:var(--warn); border-color:#f1e2b6; }
+
+  /* ── 表格 ── */
+  table{ border-collapse:separate; border-spacing:0; width:100%; font-size:13px;
+    border:1px solid var(--bd); border-radius:10px; overflow:hidden; }
+  th,td{ border:none; border-bottom:1px solid var(--bd); padding:6px 8px; text-align:center; }
+  th{ background:linear-gradient(180deg,#f4f6fa,#ecf0f6); color:#3d4c68; font-weight:600;
+    border-bottom:1px solid var(--bd2); white-space:nowrap; }
+  td + td, th + th { border-left:1px solid #eef1f6; }
+  th + th { border-left-color:#e2e7ef; }
+  tbody tr:last-child td{ border-bottom:none; }
+  tbody tr:nth-child(even) td{ background:#fafbfd; }
+  tbody tr:hover td{ background:#f1f5fd; }
+  td.bad{ background:#fdecec !important; color:var(--bad); font-weight:600; }
+
+  /* ── 方向手柄 ── */
   .pad{ display:grid; grid-template-columns:repeat(3,52px); grid-template-rows:repeat(3,52px); gap:6px; }
-  .pad button{ width:52px; height:52px; padding:0; font-size:18px; }
+  .pad button{ width:52px; height:52px; padding:0; font-size:18px; border-radius:12px; }
   .grow{ flex:1; }
-  pre#log{ height:240px; overflow:auto; margin:0; padding:8px 10px; background:#1e1e1e; color:#e0e0e0;
-    border-radius:6px; font-family:"Noto Sans Mono CJK SC", ui-monospace, monospace; font-size:12.5px;
-    line-height:1.45; white-space:pre-wrap; word-break:break-all; }
-  #status{ flex:1; padding:6px 10px; background:#fff; border:1px solid var(--bd); border-radius:6px; }
-  .banner{ display:none; margin:0 0 12px; padding:8px 12px; border-radius:8px; font-size:13px; }
-  .banner.bad{ display:block; border:1px solid var(--bad); background:#fde8e8; color:var(--bad); }
-  .banner.hold{ display:block; border:1px solid var(--warn); background:#fff8e1; color:var(--warn); }
-  /* 右上角固定面板：驱动状态 + 大急停按钮（纵向堆叠，占右上空白区，不占整行）*/
+
+  /* ── 日志与状态栏 ── */
+  pre#log{ height:240px; overflow:auto; margin:0; padding:10px 12px; background:#161b24; color:#d5dbe5;
+    border-radius:10px; font-family:"Noto Sans Mono CJK SC", ui-monospace, monospace; font-size:12.5px;
+    line-height:1.5; white-space:pre-wrap; word-break:break-all;
+    box-shadow:inset 0 2px 8px rgba(0,0,0,.35); }
+  pre#log::-webkit-scrollbar{ width:9px; }
+  pre#log::-webkit-scrollbar-thumb{ background:#3a4356; border-radius:5px; }
+  #status{ flex:1; padding:7px 12px; background:var(--card); border:1px solid var(--bd);
+    border-radius:9px; font-size:13px; color:#5a6577; box-shadow:var(--shadow); }
+
+  /* ── 提示横幅 ── */
+  .banner{ display:none; margin:0 0 14px; padding:9px 14px; border-radius:10px; font-size:13px; }
+  .banner.bad{ display:block; border:1px solid #f3c1c1; background:#fdecec; color:var(--bad);
+    box-shadow:0 2px 8px rgba(214,69,69,.10); }
+  .banner.hold{ display:block; border:1px solid #f1e2b6; background:#fdf5e0; color:var(--warn);
+    box-shadow:0 2px 8px rgba(176,122,16,.10); }
+
+  /* ── 右上角固定面板：驱动状态 + 大急停（结构/行为不变）── */
   #driveBar{ position:fixed; top:12px; right:14px; z-index:1000; width:256px;
     display:flex; flex-direction:column; align-items:stretch; gap:8px;
-    padding:10px; background:rgba(255,255,255,.96); border:1px solid var(--bd); border-radius:10px;
-    box-shadow:0 2px 12px rgba(0,0,0,.18); transition:background .15s ease, border-color .15s ease; }
-  #driveBar.on{ background:#fde8e8; border-color:#d64545; }
-  #driveState{ text-align:center; font-size:28px; font-weight:700; padding:10px 12px; border-radius:9px;
-    white-space:nowrap; background:#e3f4e7; color:#2a8a3e; }
+    padding:10px; background:rgba(255,255,255,.82); backdrop-filter:blur(10px) saturate(1.3);
+    -webkit-backdrop-filter:blur(10px) saturate(1.3);
+    border:1px solid var(--bd); border-radius:14px;
+    box-shadow:0 4px 24px rgba(16,24,40,.14);
+    transition:background .15s ease, border-color .15s ease; }
+  #driveBar.on{ background:rgba(253,232,232,.92); border-color:#d64545; }
+  #driveState{ text-align:center; font-size:28px; font-weight:700; padding:10px 12px; border-radius:10px;
+    white-space:nowrap; background:linear-gradient(180deg,#e9f7ef,#ddf2e5); color:var(--ok); }
   #driveBar.on #driveState{ background:#d64545; color:#fff; animation:dpulse 1s steps(1,end) infinite; }
   @keyframes dpulse{ 50%{ opacity:.45; } }
   /* 图标（● / ⏹）单独放大：相对各自所在文字再 2 倍 */
   .bigico{ font-size:2em; vertical-align:middle; }
-  #btnEstop{ width:100%; background:#d64545; color:#fff; border:2px solid #fff; border-radius:8px;
+  #btnEstop{ width:100%; background:linear-gradient(180deg,#e0524f,#c73a3a); color:#fff;
+    border:2px solid #fff; border-radius:11px;
     font-size:36px; font-weight:800; letter-spacing:1px; line-height:1.25; padding:16px 8px; cursor:pointer;
-    box-shadow:0 1px 4px rgba(0,0,0,.25); }
-  #btnEstop:hover{ background:#bf3a3a; color:#fff; border-color:#fff; }
+    box-shadow:0 2px 10px rgba(190,40,40,.35); }
+  #btnEstop:hover{ background:linear-gradient(180deg,#d24543,#b53232); color:#fff; border-color:#fff;
+    box-shadow:0 3px 14px rgba(190,40,40,.5); }
   /* 驱动中：整页红色边框警示（不挡点击）*/
   #driveEdge{ position:fixed; inset:0; border:14px solid #d64545; box-shadow:inset 0 0 0 2px #fff; pointer-events:none; z-index:999; display:none; }
   #driveEdge.on{ display:block; animation:edgeglow 1s ease-in-out infinite; }
@@ -1519,6 +1698,7 @@ PAGE = r"""<!DOCTYPE html>
       <button onclick="api('calib_prone')">① 记录趴姿</button>
       <button onclick="api('calib_stand')">② 记录站姿（手扶撑起后点）</button>
       <button onclick="confirmSave()">③ 计算并保存配置</button>
+      <button onclick="confirmReanchor()" title="prone=当前读数、Δ保持不变、stand=prone+Δ。仅适用于零点平移（换电机/摇臂错齿）而趴→站行程未变的情况；连杆几何变过请走 ①②③ 完整标定">🔁 重锚趴姿（保持Δ）</button>
       <span class="pill" id="pronePill">趴姿: 未记录</span>
       <span class="pill" id="standPill">站姿: 未记录</span>
     </div>
@@ -1559,11 +1739,14 @@ PAGE = r"""<!DOCTYPE html>
             <label title="给所有关节的统一基准前馈力矩(转子侧N·m)，叠加每关节表里的 t_ff。范围 -8~8">前馈力矩 N·m</label>
             <input id="stTff" type="number" min="-8" max="8" step="0.05" placeholder="默认" oninput="boundInput(this)" onchange="boundClamp(this)" style="padding:4px 6px;border:1px solid var(--bd);border-radius:6px">
           </div>
-          <label style="display:flex;align-items:center;gap:7px;margin-top:9px;font-size:13px;cursor:pointer"
-                 title="勾选后分段抬升：先小腿→再大腿→再 hip，上一组到位保持后再动下一组，降低同时驱动的峰值力矩/电流。每段各自按上面的速度/最小时长限速，总时长≈三段之和。">
-            <input id="stStaged" type="checkbox" checked style="width:16px;height:16px">
-            <span>分段抬升（小腿→大腿→hip，降低峰值电流，<b>推荐</b>）</span>
-          </label>
+          <div style="display:flex;align-items:center;gap:7px;margin-top:9px;font-size:13px">
+            <label for="stStyle" title="分段抬升：小腿→大腿→hip 逐组抬，降低同时驱动的峰值力矩/电流，但段间有停顿、观感偏机械。&#10;自然站立：全身 12 关节同步、按 S 曲线缓入缓出（起停速度/加速度为 0），动作连贯流畅、更像动物起身；瞬时峰值速度不超上面的限速，但同时驱动的峰值电流更高。&#10;整机同时：全关节同步匀速直线插值（旧行为）。">站立方式</label>
+            <select id="stStyle" style="flex:1">
+              <option value="staged">分段抬升（小腿→大腿→hip，峰值电流低，稳妥）</option>
+              <option value="natural">自然站立（全身同步 + S曲线缓入缓出，动作流畅）</option>
+              <option value="sync">整机同时（线性匀速）</option>
+            </select>
+          </div>
         </div>
         <p class="muted" style="font-size:12.5px;margin:8px 0 0;max-width:430px">
           点「站立」会先读当前角并与配置趴姿比对，全部贴近（在「校验阈值」内）才放行，然后按上面的
@@ -1822,14 +2005,19 @@ PAGE = r"""<!DOCTYPE html>
   function confirmSave(){
     if(confirm('将根据已记录的趴姿/站姿计算各关节Δ并写入 stand_config.json？')) api('save_config');
   }
+  function confirmReanchor(){
+    if(confirm('重锚趴姿（保持Δ）：把 12 个关节的 prone 重设为当前读数，Δ 不变，stand=prone+Δ，写回 stand_config.json（自动备份旧配置）。\n\n前提：\n· 机器人已摆好标定趴姿，各关节（尤其小腿）完全靠住限位，不再滑动；\n· 机械只发生了零点平移（换电机/摇臂错齿），趴→站行程没有变。\n若连杆几何变过，请改走 ①②③ 完整标定。\n\n执行时会间隔 5s 读两次做静止校验，任一关节漂移超 0.5° 将拒绝写入。')) api('reanchor_prone');
+  }
   // 读整机站立的覆盖参数：留空则不传（后端沿用配置默认值）
   function standParams(){
     const m={stKp:'kp', stKw:'kw', stVmax:'vmax', stMinDur:'min_dur', stRate:'rate', stThr:'thr', stTff:'tff'};
     const o={};
     for(const id in m){ const v=document.getElementById(id).value.trim(); if(v!=='') o[m[id]]=v; }
-    o.staged = document.getElementById('stStaged').checked ? '1' : '0';
+    o.style = document.getElementById('stStyle').value;   // staged / natural / sync
+    o.staged = o.style==='staged' ? '1' : '0';            // 兼容旧后端参数
     return o;
   }
+  const STYLE_NAMES = {staged:'分段抬升（小腿→大腿→hip）', natural:'自然站立（全身同步 + S曲线缓入缓出）', sync:'整机同时（线性匀速）'};
   function confirmStand(){
     const o=standParams();
     const dv=(id,def)=>{ const el=document.getElementById(id); return el.value.trim()!=='' ? el.value.trim() : (el.placeholder||def); };
@@ -1837,8 +2025,8 @@ PAGE = r"""<!DOCTYPE html>
       +'  速度='+dv('stVmax','默认')+'rad/s  最小时长='+dv('stMinDur','默认')+'s'
       +'  频率='+dv('stRate','默认')+'Hz  校验阈值='+dv('stThr','默认')+'rad'
       +'  前馈='+dv('stTff','默认')+'N·m(叠加每关节t_ff)'
-      +'\n抬升方式：'+(o.staged==='1'?'分段（小腿→大腿→hip）':'整机同时')
-      +(Object.keys(o).filter(k=>k!=='staged').length?'\n（含页面覆盖值，仅本次生效，不写回配置）':'\n（数值参数全部沿用配置默认值）');
+      +'\n站立方式：'+(STYLE_NAMES[o.style]||o.style)
+      +(Object.keys(o).filter(k=>k!=='staged'&&k!=='style').length?'\n（含页面覆盖值，仅本次生效，不写回配置）':'\n（数值参数全部沿用配置默认值）');
     if(confirm('确认执行整机站立？\n\n'+note+'\n\n请确保：机器人已自然趴好、周围无人无障碍、可随时按急停。'))
       api('stand', o);
   }
@@ -1849,7 +2037,7 @@ PAGE = r"""<!DOCTYPE html>
     const note='本次参数：K_P='+dv('stKp','默认')+'  K_W='+dv('stKw','默认')
       +'  速度='+dv('stVmax','默认')+'rad/s  最小时长='+dv('stMinDur','默认')+'s'
       +'  频率='+dv('stRate','默认')+'Hz  前馈='+dv('stTff','默认')+'N·m'
-      +'\n下放方式：'+(o.staged==='1'?'分段反序（hip→大腿→小腿）':'整机同时')+'，前馈随下放 满→0';
+      +'\n下放方式：'+(o.style==='staged'?'分段反序（hip→大腿→小腿）':(STYLE_NAMES[o.style]||o.style))+'，前馈随下放 满→0';
     if(confirm('确认执行整机坐下（回趴姿）？\n\n'+note+'\n\n请确保：机器人正站立保持、落点处无障碍、可随时按急停。'))
       api('sit', o);
   }

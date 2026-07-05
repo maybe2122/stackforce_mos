@@ -159,9 +159,23 @@ MUJOCO_GL=glx ../env_isaaclab/bin/python deploy/mujoco/play_mujoco.py
 | 参数 | 默认 | 说明 |
 |:---|:---:|:---|
 | `--checkpoint` | 最新 `model_*.pt` | rsl_rl 的 `.pt`（含 `actor_state_dict` 或 `model_state_dict` 均可），不给则自动挑 `logs/rsl_rl` 下最新 |
-| `--headless` | off | 不开 viewer，静默跑 N 步做验证（SSH 下用） |
+| `--headless` | off | 不开 viewer，静默跑 N 步做验证（SSH 下用），输出存活/里程/高度/倾角指标 |
 | `--duration` | `0` | 跑多少秒；0 = viewer 模式不限时；headless 必须 > 0 |
 | `--mjcf` | `assets/mos2026_2.xml` | MJCF 路径 |
+| `--lin-vel-source` | `sim` | `zero` = obs[0:3] 喂 0，复刻真机 rl_deploy 无线速度传感器的输入 |
+| `--imu-source` | `sim` | `stub` = ang_vel=0、gravity=[0,0,-1]，复刻真机 IMU 未接入的输入 |
+| `--kp` / `--kv` | `0`（MJCF 的 25/0.5） | 覆盖执行器 PD；真机 rl_deploy 当前 ≈ 320/3.2（=8/0.08 × 6.33²） |
+| `--settle` | `1.0` | 切策略前默认姿态伺服站稳秒数（对齐 rl_deploy 的 hold_secs） |
+| `--no-fall-stop` | off | headless 摔倒（高度<0.22 或倾角 cos<0.85，与训练 env 同判据）不提前终止 |
+
+> [!WARNING]
+> **2026-07-04 sim2sim 测试结论**：训练增益 kp=25 下 MuJoCo 软闭链撑不住 11.7 kg
+> 自重（静差 ≈ τ_gravity/kp ≈ 0.3 rad），四连杆在下沉过程中穿过奇异位形翻进**折叠
+> 装配分支**（connect 残差仍 <0.2 mm，属合法第二解；真机有物理限位不会发生），
+> 之后即使关节回到默认角机身也只有 ~0.17 m——刚化 solref/solimp、提高仿真频率均
+> 无效，被动角活动区间与折叠分支重叠，限位也挡不住。用部署增益 kp=320 站立正常
+> （0.266 m 站高上限），但策略是按 kp=25 训练的，接管后立即摔倒（增益失配）。
+> 结论：当前 checkpoint 无法通过 MuJoCo sim2sim 验证，需按可部署增益重训。
 
 > [!TIP]
 > 无真实显示/GPU 的环境里直接开 viewer 会被杀，改用 `--headless --duration <秒>`。

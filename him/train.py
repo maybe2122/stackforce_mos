@@ -39,7 +39,7 @@ parser.add_argument(
 # --- 域随机化 / sim2real（与 scripts/rsl_rl/train.py 同款；默认关闭）---
 # 注意：HIM 自带 actor 观测噪声（him_env_cfg.him_actor_noise，默认开、分块均匀噪声），
 # 基类的 --obs_noise_std 路径被 HIM 的 _get_observations 覆写绕开，故这里不提供该参数。
-parser.add_argument("--domain_rand", action="store_true",
+parser.add_argument("--domain_rand", default=True, action="store_true",
                     help="启用域随机化事件（摩擦/质量/增益/关节零位偏置/周期推搡）。默认关闭。")
 parser.add_argument("--no_actor_noise", action="store_true",
                     help="关闭 HIM 的 actor 观测噪声（him_actor_noise，默认开启）。")

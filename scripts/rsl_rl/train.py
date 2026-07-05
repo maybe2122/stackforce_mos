@@ -219,7 +219,14 @@ def _runner_expects_nested_runner():
     return 'train_cfg["runner"]' in source or "train_cfg['runner']" in source
 
 
-def to_compatible_rsl_rl_cfg(agent_cfg):
+def to_compatible_rsl_rl_cfg(agent_cfg, has_critic_obs=False):
+    """转换 agent cfg 到当前 rsl_rl 版本的格式。
+
+    has_critic_obs：env 是否输出独立的 "critic" 特权观测组（非对称 critic，
+    见 env cfg 的 state_space）。True 时 obs_groups 的 critic 指向 "critic"
+    组，False 时退回与 actor 共用 "policy" 组（对称 critic / 旧行为）。
+    """
+    critic_group = ["critic"] if has_critic_obs else ["policy"]
     data = agent_cfg.to_dict() if hasattr(agent_cfg, "to_dict") else dict(agent_cfg)
     allowed_policy_keys = {
         "actor_hidden_dims",
@@ -256,7 +263,7 @@ def to_compatible_rsl_rl_cfg(agent_cfg):
     runner_cfg.setdefault("num_steps_per_env", getattr(agent_cfg, "num_steps_per_env", 24))
     runner_cfg.setdefault("max_iterations", getattr(agent_cfg, "max_iterations", 1500))
     runner_cfg.setdefault("save_interval", getattr(agent_cfg, "save_interval", 50))
-    runner_cfg.setdefault("obs_groups", {"policy": ["policy"], "critic": ["policy"]})
+    runner_cfg.setdefault("obs_groups", {"policy": ["policy"], "critic": critic_group})
     runner_cfg.setdefault("experiment_name", getattr(agent_cfg, "experiment_name", "mos_one"))
     runner_cfg.setdefault("run_name", getattr(agent_cfg, "run_name", ""))
     runner_cfg.setdefault("resume", getattr(agent_cfg, "resume", False))
@@ -291,7 +298,7 @@ def to_compatible_rsl_rl_cfg(agent_cfg):
         }
         runner_cfg.pop("policy_class_name", None)
         runner_cfg.pop("algorithm_class_name", None)
-        runner_cfg["obs_groups"] = {"actor": ["policy"], "critic": ["policy"], "policy": ["policy"]}
+        runner_cfg["obs_groups"] = {"actor": ["policy"], "critic": critic_group, "policy": ["policy"]}
         runner_cfg.setdefault("multi_gpu", None)
         return {**runner_cfg, "actor": actor_cfg, "critic": critic_cfg, "algorithm": algorithm_cfg}
     return {**runner_cfg, "policy": policy_cfg, "algorithm": algorithm_cfg}
@@ -460,7 +467,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlBaseRun
 
     env = gym.make(args_cli.task, cfg=env_cfg)
     wrapped_env = LegacyRslRlVecEnvWrapper(env, clip_actions=getattr(agent_cfg, "clip_actions", None))
-    runner = OnPolicyRunner(wrapped_env, to_compatible_rsl_rl_cfg(agent_cfg), log_dir=log_dir, device=agent_cfg.device)
+    runner = OnPolicyRunner(
+        wrapped_env,
+        to_compatible_rsl_rl_cfg(agent_cfg, has_critic_obs=wrapped_env.num_privileged_obs is not None),
+        log_dir=log_dir,
+        device=agent_cfg.device,
+    )
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
     start_time = time.time()

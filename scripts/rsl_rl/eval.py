@@ -68,6 +68,9 @@ parser.add_argument("--action_delay", type=int, default=0, help="动作延迟步
 parser.add_argument("--push_interval_s", type=float, default=0.0, help=">0 时每隔该秒数对 base 施加一次随机水平速度冲量（推搡测试）。")
 parser.add_argument("--push_vel", type=float, default=0.5, help="推搡冲量大小 (m/s)，方向随机水平。")
 parser.add_argument("--seed", type=int, default=0)
+parser.add_argument("--no_privileged_critic", action="store_true",
+                    help="关闭非对称 critic 特权观测（state_space=0）。评估 2026-07-05 之前"
+                         "训练的旧 checkpoint（对称 critic）时必须加此参数，否则维度不匹配。")
 parser.add_argument("--tag", type=str, default="eval", help="结果标签，用于 JSON 文件名与报告分组。")
 parser.add_argument("--out_dir", type=str, default=None, help="JSON 输出目录，默认 <checkpoint目录>/eval。")
 AppLauncher.add_app_launcher_args(parser)
@@ -225,7 +228,10 @@ class LegacyRslRlVecEnvWrapper:
         return self.env.close()
 
 
-def to_compatible_rsl_rl_cfg(agent_cfg):
+def to_compatible_rsl_rl_cfg(agent_cfg, has_critic_obs=False):
+    # has_critic_obs：env 输出独立 "critic" 特权观测组时为 True（非对称 critic），
+    # obs_groups 的 critic 指向 "critic" 组；否则退回与 actor 共用 "policy"。
+    critic_group = ["critic"] if has_critic_obs else ["policy"]
     data = agent_cfg.to_dict() if hasattr(agent_cfg, "to_dict") else dict(agent_cfg)
     allowed_policy_keys = {
         "actor_hidden_dims", "critic_hidden_dims", "activation", "init_noise_std", "clip_actions",
@@ -246,7 +252,7 @@ def to_compatible_rsl_rl_cfg(agent_cfg):
     runner_cfg.setdefault("num_steps_per_env", getattr(agent_cfg, "num_steps_per_env", 24))
     runner_cfg.setdefault("max_iterations", getattr(agent_cfg, "max_iterations", 1500))
     runner_cfg.setdefault("save_interval", getattr(agent_cfg, "save_interval", 50))
-    runner_cfg.setdefault("obs_groups", {"policy": ["policy"], "critic": ["policy"]})
+    runner_cfg.setdefault("obs_groups", {"policy": ["policy"], "critic": critic_group})
     runner_cfg.setdefault("experiment_name", getattr(agent_cfg, "experiment_name", "mos_one"))
     runner_cfg.setdefault("run_name", getattr(agent_cfg, "run_name", ""))
     runner_cfg.setdefault("resume", getattr(agent_cfg, "resume", False))
@@ -281,7 +287,7 @@ def to_compatible_rsl_rl_cfg(agent_cfg):
         }
         runner_cfg.pop("policy_class_name", None)
         runner_cfg.pop("algorithm_class_name", None)
-        runner_cfg["obs_groups"] = {"actor": ["policy"], "critic": ["policy"], "policy": ["policy"]}
+        runner_cfg["obs_groups"] = {"actor": ["policy"], "critic": critic_group, "policy": ["policy"]}
         runner_cfg.setdefault("multi_gpu", None)
         return {**runner_cfg, "actor": actor_cfg, "critic": critic_cfg, "algorithm": algorithm_cfg}
     return {**runner_cfg, "policy": policy_cfg, "algorithm": algorithm_cfg}
@@ -311,6 +317,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlBaseRun
     # 评估时关掉箭头可视化（headless 下无意义，省开销）。
     if hasattr(env_cfg, "show_velocity_arrows"):
         env_cfg.show_velocity_arrows = False
+    # 评估必须按全速命令测量：关闭训练用的命令速度课程。
+    if hasattr(env_cfg, "command_curriculum_steps"):
+        env_cfg.command_curriculum_steps = 0
+    # 旧 checkpoint（对称 critic）兼容：按需关闭特权观测。
+    if args_cli.no_privileged_critic and hasattr(env_cfg, "state_space"):
+        env_cfg.state_space = 0
 
     # --- 摩擦覆盖（泛化测试）---
     if args_cli.friction is not None:
@@ -353,7 +365,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlBaseRun
 
     env = gym.make(args_cli.task, cfg=env_cfg)
     wrapped_env = LegacyRslRlVecEnvWrapper(env, clip_actions=getattr(agent_cfg, "clip_actions", None))
-    runner = OnPolicyRunner(wrapped_env, to_compatible_rsl_rl_cfg(agent_cfg), log_dir=None, device=env.unwrapped.device)
+    runner = OnPolicyRunner(
+        wrapped_env,
+        to_compatible_rsl_rl_cfg(agent_cfg, has_critic_obs=wrapped_env.num_privileged_obs is not None),
+        log_dir=None,
+        device=env.unwrapped.device,
+    )
     runner.load(resume_path)
     policy = runner.get_inference_policy(device=env.unwrapped.device)
 
@@ -402,6 +419,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlBaseRun
     g_speed = z()                       # 实际前向速度 vx 的累计
     g_base_h, g_upright, g_power = z(), z(), z()
     g_foot_slip = z()
+    g_lin_err = z()                     # 水平线速度向量误差 ||cmd_xy - v_xy||（对齐 robot_lab lin_err）
+    g_act_rate = z()                    # 相邻两步动作差 |a_t - a_{t-1}| 均值（对齐 robot_lab action_rate）
+    g_slip_speed = z()                  # 触地足端水平滑移速度（线性 m/s，对齐 robot_lab foot_slip）
     tau_abs_sum = torch.zeros(nj, device=device)
     tau_sq_sum = torch.zeros(nj, device=device)
     tau_absmax = torch.zeros(nj, device=device)
@@ -424,6 +444,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlBaseRun
 
     prev_xy = robot.data.root_pos_w[:, :2].clone()
     prev_contact = torch.zeros(N, max(nf, 1), dtype=torch.bool, device=device)
+    prev_applied = None  # action_rate 的上一步动作
     delay_buf = []  # 动作延迟缓冲
 
     obs_dict, _ = env.reset()
@@ -458,6 +479,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlBaseRun
             dones = terminated | truncated
             alive = (~dones).float()  # done 的 env 本步状态已被自动 reset，逐步指标排除
 
+            # 动作平滑度（排除 done 步：reset 后动作清零会造成虚假跳变）
+            if prev_applied is not None:
+                g_act_rate += ((applied - prev_applied).abs().mean(dim=1) * alive).sum()
+            prev_applied = applied.clone()
+
             # --- 读取本步状态 ---
             root_lin_b = torch.nan_to_num(robot.data.root_lin_vel_b)
             root_ang_b = torch.nan_to_num(robot.data.root_ang_vel_b)
@@ -479,6 +505,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlBaseRun
             vx_err = (cmd_xy_t[0] - root_lin_b[:, 0]).abs()
             vy_err = (cmd_xy_t[1] - root_lin_b[:, 1]).abs()
             yaw_err = (cmd_wz_t - root_ang_b[:, 2]).abs()
+            g_lin_err += (torch.norm(cmd_xy_t - root_lin_b[:, :2], dim=1) * alive).sum()
             upright = (grav_b[:, :2] ** 2).sum(dim=1)
             g_alive += alive.sum()
             g_vx_abs += (vx_err * alive).sum(); g_vx_sq += ((vx_err ** 2) * alive).sum()
@@ -509,6 +536,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlBaseRun
                 # 足端打滑：接触脚的水平速度平方和
                 slip = (foot_vel_w[..., :2] ** 2).sum(-1) * contact.float()
                 g_foot_slip += (slip.sum(dim=1) * alive).sum()
+                # 线性版打滑速度 (m/s)，按接触步取均值（对齐 robot_lab foot_slip 口径）
+                slip_speed = torch.norm(foot_vel_w[..., :2], dim=-1) * contact.float()
+                g_slip_speed += (slip_speed.sum(dim=1) * alive).sum()
                 # 相位（trot 检测）：对角对 (FL,RR)/(FR,RL) 同相位，同端对 (FL,FR)/(RL,RR) 同相位
                 fl, fr, rl, rr = contact[:, 0], contact[:, 1], contact[:, 2], contact[:, 3]
                 diag = ((fl == rr).float() + (fr == rl).float()) * 0.5
@@ -585,6 +615,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlBaseRun
         "mean_cot": _mean(rec_cot),
         # 足端打滑
         "mean_foot_slip": g_foot_slip.item() / n_alive,
+        # --- 与 robot_lab eval.py 对齐口径的指标 ---
+        "lin_err": g_lin_err.item() / n_alive,
+        "mean_action_rate": g_act_rate.item() / max(n_alive - 1.0, 1.0),
+        "mean_foot_slip_speed": (
+            g_slip_speed.item() / max(float(foot_contact_steps.sum().item()), 1.0) if nf >= 4 else float("nan")
+        ),
     }
     # 步态相位
     if gait_pair_steps.item() > 0:
@@ -651,9 +687,61 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlBaseRun
     out_path = os.path.join(out_dir, f"{args_cli.tag}.json")
     with open(out_path, "w") as f:
         json.dump(result, f, indent=2, ensure_ascii=False)
+    md_path = os.path.join(out_dir, f"{args_cli.tag}.md")
+    with open(md_path, "w") as f:
+        f.write(_format_unified_md(result))
     print(f"\n[INFO] 评估结果已保存: {out_path}", flush=True)
+    print(f"[INFO] 统一格式报告（与 robot_lab eval.py 同口径，可直接并排对比）: {md_path}", flush=True)
     print(f"EVAL_COMPLETED tag={args_cli.tag} json={out_path}", flush=True)
     env.close()
+
+
+# 与 robot_lab scripts/reinforcement_learning/rsl_rl/eval.py 输出对齐的指标说明。
+METRIC_LEGEND = """
+## 指标说明（怎样算好）
+
+| 指标 | 含义 | 怎样算好 |
+|---|---|---|
+| cmd (vx, vy, wz) | 固定速度命令：前向 [m/s]、侧向 [m/s]、偏航角速度 [rad/s] | — |
+| lin_err | 水平线速度跟踪误差的均值 [m/s] | 越小越好：<0.15 优秀，0.15~0.3 一般，>0.3 基本没跟上命令 |
+| ang_err | 偏航角速度跟踪误差的均值 [rad/s] | 越小越好，<0.2 良好 |
+| fall_rate | 已结束的 episode 中非超时终止（摔倒/机身过低/翻倒）的占比 | 越低越好，好策略接近 0% |
+| episodes | 统计窗口内结束的 episode 数（摔倒+超时） | fall_rate 的样本量；为 0 时 fall_rate 无意义 |
+| CoT | 运输成本 = 关节能耗 / (重量 x 距离)，无量纲 | 越小越省电：四足正常行走约 0.3~0.8，>2 说明大量能量浪费 |
+| tau_mean | 关节力矩绝对值的均值 [Nm] | 越小越省电 |
+| tau_peak | 关节力矩绝对值的峰值 [Nm] | 越低越安全；贴近电机上限说明真机部署有风险 |
+| action_rate | 相邻两步动作差的均值 | 越小越平滑；过大意味着真机上高频抖动、电机发热 |
+| foot_slip | 足端触地期间的水平滑移速度 [m/s] | 越小越好，<0.1 说明落脚干净不打滑 |
+
+判读顺序：先看 fall_rate 和 lin_err（能不能走、跟不跟得上），再看 CoT / action_rate / foot_slip
+（走得好不好），tau_peak 用于评估真机部署的安全裕度。跨项目对比时确保命令、地形、时长一致。
+"""
+
+
+def _format_unified_md(result) -> str:
+    """输出与 robot_lab eval.py 相同表头的 markdown 报告，方便两个项目并排对比。"""
+    c, m = result["condition"], result["metrics"]
+    slip = m.get("mean_foot_slip_speed", float("nan"))
+    fall = m.get("fall_rate", float("nan"))
+    cot = m.get("mean_cot", float("nan"))
+    fmt = lambda v, spec=".3f": (format(v, spec) if v == v else "-")  # noqa: E731  NaN → "-"
+    lines = [
+        f"# Evaluation: {c['checkpoint']}",
+        "",
+        f"- tag: {c['tag']}, terrain: {c['terrain']}, num_envs: {c['num_envs']}, num_steps: {c['num_steps']}",
+        f"- friction: {c['friction']}, mass_scale: {c['mass_scale']}, obs_noise: {c['obs_noise']},"
+        f" action_delay: {c['action_delay']}, push: {c['push_interval_s']}s/{c['push_vel']}",
+        "",
+        "| cmd (vx, vy, wz) | lin_err [m/s] | ang_err [rad/s] | fall_rate | episodes | CoT |"
+        " tau_mean [Nm] | tau_peak [Nm] | action_rate | foot_slip [m/s] |",
+        "|---" * 10 + "|",
+        f"| ({c['cmd_vx']:.1f}, {c['cmd_vy']:.1f}, {c['cmd_wz']:.1f}) | {fmt(m['lin_err'])} |"
+        f" {fmt(m['yaw_mae'])} | {fmt(fall * 100, '.1f')}% | {m['episodes']} | {fmt(cot)} |"
+        f" {fmt(m['torque_abs_mean_all'], '.2f')} | {fmt(m['torque_abs_max_all'], '.2f')} |"
+        f" {fmt(m['mean_action_rate'])} | {fmt(slip)} |",
+        METRIC_LEGEND,
+    ]
+    return "\n".join(lines)
 
 
 def _print_report(result):
