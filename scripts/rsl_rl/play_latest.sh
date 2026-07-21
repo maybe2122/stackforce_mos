@@ -21,8 +21,10 @@ if [ ! -d "${LOGS_DIR}" ]; then
 fi
 
 # Newest .pt by modification time (handles spaces / weird names safely).
+# NOTE: 'head -n 1' here would SIGPIPE 'find' under pipefail once logs/ grows large;
+# 'sed -n 1p' consumes the whole stream so the pipeline always exits 0.
 CHECKPOINT="$(find "${LOGS_DIR}" -type f -name '*.pt' -printf '%T@ %p\n' \
-              | sort -nr | head -n 1 | cut -d' ' -f2-)"
+              | sort -nr | sed -n '1p' | cut -d' ' -f2-)"
 
 if [ -z "${CHECKPOINT}" ]; then
     echo "[play_latest] No .pt checkpoints found under ${LOGS_DIR}/." >&2

@@ -16,7 +16,7 @@
 让机器人从蹲姿平滑插值站起来（settle → rise → hold → lower 一个循环），逐控制步记录：
 
 - **关节驱动力矩** `τ_joint = data.actuator_force`（position 伺服实际输出，已含重力 + 惯性 + 地反力）
-- **电机转子侧力矩** `τ_rotor = τ_joint /(N·η)`（用 `deploy/common/dynamics.py` 的减速比/效率反射）
+- **电机转子侧力矩** `τ_rotor = τ_joint /(N·η)`（用 `传统步态/代码/dynamics.py` 的减速比/效率反射）
 - **电机负载率** `|τ_joint| / 输出峰值`，超 `effort_limit` / 输出峰值即报警
 - 估算相电流 `I = τ_rotor / Kt`（`--kt` 传入，0 则不算）
 

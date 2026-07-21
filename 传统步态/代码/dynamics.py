@@ -12,8 +12,8 @@
 几何/质量取自 deploy/mujoco/assets/mos2026_2.xml；电机规格取自
 deploy/real/config/mos2026_2.yaml 注释（GO-M8010-6, 24V）。
 
-运行：python deploy/common/dynamics.py            # 控制台报告
-      python deploy/common/dynamics.py --plot     # 另出图到 outputs/dynamics/
+运行：python 传统步态/代码/dynamics.py            # 控制台报告
+      python 传统步态/代码/dynamics.py --plot     # 另出图到 传统步态/图与数据/dynamics/
 """
 
 from __future__ import annotations
@@ -104,17 +104,22 @@ def link_forces(foot_force: np.ndarray, body_height: float):
 
 # ============================ 关节速度需求（来自步态）============
 def joint_speed_demand(scale_speed: float = 1.0):
-    """从 trot 步态算关节角速度需求。scale_speed 缩短周期 = 走更快。"""
+    """从 trot 步态算关节角速度需求。scale_speed 缩短周期 = 走更快。
+
+    gait.py 2026-07-21 起用闭链模型，joint_targets 返回的 [1]/[2] 就是
+    **thigh 与 shank_link 曲柄两个真实电机**的角度，不再是「等效膝角」，
+    所以这里的角速度需求可以直接对着电机 T-N 曲线读。
+    """
     g = TrotGait()
     g.period = g.period / scale_speed
     n = 600
     times = np.linspace(0, g.period, n, endpoint=False)
-    qh = np.array([g.joint_targets(t)["fl"][1] for t in times])
-    qk = np.array([g.joint_targets(t)["fl"][2] for t in times])
+    q_thigh = np.array([g.joint_targets(t)["fl"][1] for t in times])
+    q_crank = np.array([g.joint_targets(t)["fl"][2] for t in times])
     dt = times[1] - times[0]
-    wh = np.max(np.abs(np.gradient(qh, dt)))
-    wk = np.max(np.abs(np.gradient(qk, dt)))
-    return max(wh, wk), wh, wk
+    w_thigh = np.max(np.abs(np.gradient(q_thigh, dt)))
+    w_crank = np.max(np.abs(np.gradient(q_crank, dt)))
+    return max(w_thigh, w_crank), w_thigh, w_crank
 
 
 # ============================ 齿轮/传动受力 ============================
@@ -213,7 +218,7 @@ def report():
     print("\n--- 关节角速度需求（来自 trot 步态）---")
     for sp, label in [(1.0, "当前慢速 gait"), (2.0, "2× 速度"), (3.0, "3× 速度")]:
         wmax, wh, wk = joint_speed_demand(sp)
-        print(f"  {label:14s}: 关节峰值角速度 ω_req={wmax:.2f} rad/s (大腿 {wh:.2f}, 膝 {wk:.2f})")
+        print(f"  {label:14s}: 关节峰值角速度 ω_req={wmax:.2f} rad/s (大腿 {wh:.2f}, 曲柄 {wk:.2f})")
     w_req_design = joint_speed_demand(3.0)[0]
 
     print("\n" + "=" * 70)
@@ -259,7 +264,7 @@ def _plot(tau_req, w_req, bounds):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    out = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "outputs", "dynamics")
+    out = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "图与数据", "dynamics")
     os.makedirs(out, exist_ok=True)
     n_tmin, n_smax, n_bal = bounds
 

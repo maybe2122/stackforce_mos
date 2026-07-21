@@ -18,7 +18,7 @@
   策略接管后 0.12 s 摔；训练增益 kp=25 下 MuJoCo 软闭链撑不住自重、四连杆翻折叠分支。
   → 里程碑 2 重训必须**连增益一起改**。
 - **步态本身也有病理**：对角同步率 0.16~0.30（无 trot 结构）、步频 5~9 Hz 高频颤步、
-  无 air time 奖励——整改对照表见 [`doc/步态评价指标.md`](doc/步态评价指标.md) §六。
+  无 air time 奖励——整改对照表见 [`传统步态/文档/步态评价指标.md`](传统步态/文档/步态评价指标.md) §六。
 - 同批修复：`rl_deploy.py` 增益语义 bug（rl_kp=25 被当转子侧 K_P 下发，40 倍刚度）、
   电机过温/merr 急停、torque_limits 12→16 漂移；`play_mujoco.py` 新增受限观测/部署
   增益/settle/action-lpf/步态报告，部署条件仿真闸门（里程碑 3）的通路已就绪。
@@ -83,7 +83,7 @@
   ≈320/3.2(关节侧等效),二者必须统一——要么训练改用可部署增益,要么先做单关节
   chirp 标定确认真机能稳定实现的最软增益再定训练值(见 §运控缺口 2)
 - [ ] **步态整形奖励**:加 feet air time(目标 0.2~0.3 s)、`action_rate` -0.005→-0.02、
-  `joint_vel` -0.0001→-0.001(症状→旋钮对照表见 `doc/步态评价指标.md` §六)
+  `joint_vel` -0.0001→-0.001(症状→旋钮对照表见 `传统步态/文档/步态评价指标.md` §六)
 - [ ] **obs 合约三处同步对账**:训练 env / `policy_export.py` 的 `OBS_DIM` /
   `rl_deploy.py` 的 `_build_obs`,逐字段(顺序、单位、scale)对齐
 - ✅ 通过标准:`eval.py` 平地 0 跌倒;对不同 `--cmd_vx` 有明确响应;
@@ -135,7 +135,7 @@ action_scale、obs 排布——sim2real 死掉的案例 90% 死在这些约定�
 - [~] **量化需求 vs 实际**
   - [ ] 用 `play.py` 力矩统计 + 电机网页扭矩监控，记录站立/支撑相各关节**实测力矩与电流**
   - [x] 用整机质量(11.70 kg)和几何，估算各关节**理论静态保持力矩**（2026-06-09，
-    `deploy/common/dynamics.py` + `doc/dynamics_gear_ratio_analysis.md`）：静立 4 腿
+    `传统步态/代码/dynamics.py` + `传统步态/文档/dynamics_gear_ratio_analysis.md`）：静立 4 腿
     τ_knee≈2.2 / trot 2 腿≈4.5 / 动态蹬地 τ_hip≈12 / 深蹲(0.256)≈14 N·m。
   - [ ] 确认仿真里 `play_torque_stats.csv` 的 |max| / rms 是否超过电机额定/峰值力矩
 - [ ] **驱动链路排查（先软后硬）**
@@ -145,7 +145,7 @@ action_scale、obs 排布——sim2real 死掉的案例 90% 死在这些约定�
 - [ ] **控制侧补偿**
   - [ ] 站立加**重力前馈**（gravity compensation），减少纯 PD 的力矩负担
   - [ ] 复核站立目标姿态，避免大力臂的高耗能站姿
-- [x] **选型评估**（2026-06-09，`doc/dynamics_gear_ratio_analysis.md`）：
+- [x] **选型评估**（2026-06-09，`传统步态/文档/dynamics_gear_ratio_analysis.md`）：
   - 结论：**减速比 6.33 已接近最优**（余量平衡最优 N\*=6.16；可行带 [3.56,10.66]；
     力矩余量 1.78× ≈ 转速余量 1.68×）。**力矩不足的根因不是减速比**，而是
     `effort_limit_sim=12` 卡在需求线零余量 + 真机驱动器电流上限/母线掉压。
@@ -269,7 +269,7 @@ action_scale、obs 排布——sim2real 死掉的案例 90% 死在这些约定�
 > 等效膝关节角」存在一个**连杆传动关系**，FK/IK 工作在“等效 3-DOF 串联腿”
 > （hip 外摆 + thigh + 等效 knee）抽象上，电机↔等效膝角的映射需单独标定。
 
-- [x] **足端正运动学 FK**（2026-06-08，`deploy/common/kinematics.py`）：
+- [x] **足端正运动学 FK**（2026-06-08，`传统步态/代码/kinematics.py`）：
   `(q_ab, q_hip, q_knee) → 足端 (x,y,z)`（hip/base 系），numpy 向量化覆盖 4 条腿。
   几何取自 `deploy/mujoco/assets/mos2026_2.xml`：L_thigh = 0.180 m；hip 外摆轴
   FL/FR=−x、RL/RR=+x；俯仰轴 左腿=−y、右腿=+y。
@@ -305,7 +305,7 @@ action_scale、obs 排布——sim2real 死掉的案例 90% 死在这些约定�
   但要的不只是"读到数",是融合出干净的 ang_vel + 重力投影)
 - [ ] **腿式里程计**:足端 FK + 接触相位 → 机身线速度。这是 lin_vel 缺口的**经典解**,
   目前仓库只押注 HIM 一条路,两条路应该都有
-  - 可复用件:`deploy/common/kinematics.py` FK 已验证到 1e-16,就差接上
+  - 可复用件:`传统步态/代码/kinematics.py` FK 已验证到 1e-16,就差接上
   - ✅ 通过标准:MuJoCo 里 `--lin-vel-source zero` + 估计器 vs 真值,平地误差 <0.1 m/s
 - [ ] **接触估计**(无足底传感器 → 力矩残差/广义动量观测器判触地;FB 已回传每关节 τ)
 - 建议顺序:互补滤波 → 腿式里程计 → 在 MuJoCo 受限观测闸门里对照真值验证精度
@@ -334,7 +334,7 @@ action_scale、obs 排布——sim2real 死掉的案例 90% 死在这些约定�
   - ☑️ MuJoCo 版已落地(2026-07-05,`deploy/mujoco/stand_balance.py`):投影重力
     PD → 每腿足端高度修正 → 闭链数值雅可比 → thigh/曲柄目标。控制律、抗抖
     三件套、增益标定实验、推搡数据、工程发现(曲柄雅可比奇异 / kp_att>0.3
-    起振边界)全部整理在 **[`doc/站立平衡控制器.md`](doc/站立平衡控制器.md)**。
+    起振边界)全部整理在 **[`传统步态/文档/站立平衡控制器.md`](传统步态/文档/站立平衡控制器.md)**。
   - [ ] 真机版(M2):IMU 到货后把同一控制律搬进 rl_deploy 底层(把仿真投影重力
     换成姿态融合输出即可)
   - ✅ 通过标准:真机站立侧推 5°,1 s 内回平
@@ -397,12 +397,12 @@ action_scale、obs 排布——sim2real 死掉的案例 90% 死在这些约定�
 > 依赖 §E 的 FK/IK（足端轨迹 → 关节目标）。
 
 - [ ] **腿部运动学库**（§E）：FK/IK 解析解 + 自洽验证，4 腿向量化。
-  ☑️ 已落地 `deploy/common/kinematics.py`（含 `--selftest`），见下方进度。
+  ☑️ 已落地 `传统步态/代码/kinematics.py`（含 `--selftest`），见下方进度。
 - [ ] 关节 PD 控制器：`τ = kp·(q*−q) + kd·(dq*−dq)`，每关节稳定无震荡
-- [x] **足端轨迹 gait**（2026-06-08，`deploy/common/gait.py`）：对角 trot，足端笛卡尔
+- [x] **足端轨迹 gait**（2026-06-08，`传统步态/代码/gait.py`）：对角 trot，足端笛卡尔
   空间规划——支撑相贴地直线 + 摆动相摆线（cycloid）抬腿，经 IK 转关节目标。
   `--selftest` 全绿（足端往返 1e-16、膝角峰值 1.40<1.57 限位、对角相位正确）；
-  `--demo` 出 `outputs/gait_demo/` 关节曲线 + 足端轨迹图 + CSV。
+  `--demo` 出 `传统步态/图与数据/gait_demo/` 关节曲线 + 足端轨迹图 + CSV。
   - [ ] **待办**：把约定角经仿射映射下发到 MuJoCo/真机，实际走起来（需 sim/硬件）。
 - [ ] 状态观测打通：joint pos/vel、base orientation/vel
 - [ ] （可选）足端 FK + 接触相位做腿式里程计，给 §C 的线速度估计兜底

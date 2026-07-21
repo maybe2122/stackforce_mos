@@ -1,6 +1,6 @@
 # mos2026_2 四足动力学 + 减速比选型分析
 
-> 工具：`deploy/common/dynamics.py`（`--plot` 出图到 `outputs/dynamics/`）。
+> 工具：`传统步态/代码/dynamics.py`（`--plot` 出图到 `传统步态/图与数据/dynamics/`）。
 > 几何/质量取自 `deploy/mujoco/assets/mos2026_2.xml`，电机规格取自
 > `deploy/real/config/mos2026_2.yaml`（GO-M8010-6, 24V）。所有数字均可复算。
 
@@ -92,8 +92,8 @@
 | 关节峰值力矩 | 21.3 N·m | 12 N·m | **1.78×** |
 | 关节空载转速 | 30 rad/s | 17.8 rad/s | **1.68×** |
 
-见 `outputs/dynamics/tn_envelope.png`（两个工作点都落在 N=6.33 包络下）、
-`outputs/dynamics/gear_margin.png`（两条余量曲线在 N≈6.3 处交叉）。
+见 `传统步态/图与数据/dynamics/tn_envelope.png`（两个工作点都落在 N=6.33 包络下）、
+`传统步态/图与数据/dynamics/gear_margin.png`（两条余量曲线在 N≈6.3 处交叉）。
 
 ---
 

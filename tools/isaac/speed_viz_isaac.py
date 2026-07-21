@@ -15,7 +15,7 @@
 
 为什么是「运动学播放」
 ----------------------
-关节角与角速度由 `deploy/common/speed_map.py` 的解析解算器逐帧给出（足端轨迹→IK→
+关节角与角速度由 `传统步态/代码/speed_map.py` 的解析解算器逐帧给出（足端轨迹→IK→
 解析 Jacobian→q̇），机身按目标速度平移。这是**几何/运动学真值**，不含接触动力学——
 正好直接把「机身速度 ↔ 每个电机要转多快」画在机器人身上。HUD 上的电机角速度是权威
 解析值；sim 里的机器人姿态是可视化载体（膝为平行四连杆闭链，shank 电机↔等效膝角的
@@ -40,7 +40,7 @@ import numpy as np
 
 # deploy/common 是纯 numpy 解算器，加进 path 直接复用（不依赖被重命名的 source/ 包）
 REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT / "deploy" / "common"))
+sys.path.insert(0, str(REPO_ROOT / "传统步态" / "代码"))
 
 from isaaclab.app import AppLauncher
 

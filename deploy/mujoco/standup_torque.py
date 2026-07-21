@@ -75,7 +75,7 @@ STAND_SHANK_PHYS = 0.4
 CROUCH_THIGH_PHYS = 0.30
 CROUCH_SHANK_PHYS = -0.35
 
-# --- 电机/传动常数（取自 deploy/common/dynamics.py，GO-M8010-6 @24V）-----------
+# --- 电机/传动常数（取自 传统步态/代码/dynamics.py，GO-M8010-6 @24V）-----------
 GEAR = 6.33                 # 减速比
 ETA = 0.90                  # 减速器效率
 TAU_OUT_PEAK = 23.7         # 输出端峰值力矩 N·m（电机物理上限）

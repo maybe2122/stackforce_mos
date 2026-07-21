@@ -43,7 +43,7 @@ q_knee」存在一个连杆传动关系，需单独标定（todo.md §E「闭链
 sign/offset 取决于 USD/电机的轴向与零位（见 config/mos2026_2.yaml 的
 default_dof_pos 与 stand_config.json）。映射标定后即可接 rl_deploy.py。
 
-自测：``python deploy/common/kinematics.py --selftest``
+自测：``python 传统步态/代码/kinematics.py --selftest``
 """
 
 from __future__ import annotations

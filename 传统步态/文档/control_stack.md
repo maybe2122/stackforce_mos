@@ -4,7 +4,7 @@
 > 这些模块是 RL 策略上真机、做传统控制 baseline、以及执行器选型的基础。
 >
 > 相关文档：[动力学+减速比选型](./dynamics_gear_ratio_analysis.md) ｜ [GO-M8010-6 电机](./8010-6motor.md)
-> 任务清单与进度见根目录 [`todo.md`](../todo.md)。
+> 任务清单与进度见根目录 [`todo.md`](../../todo.md)。
 
 ---
 
@@ -12,9 +12,11 @@
 
 | 模块 | 文件 | 依赖 | 验证 |
 |---|---|---|---|
-| 腿部正/逆运动学 FK/IK | `deploy/common/kinematics.py` | numpy | `--selftest` |
-| 足端轨迹 trot 步态 | `deploy/common/gait.py` | numpy, matplotlib | `--selftest` / `--demo` |
-| 动力学 + 减速比选型 | `deploy/common/dynamics.py` | numpy, matplotlib | `--plot` |
+| **闭链腿 FK/IK/Jacobian** ⭐ | `传统步态/代码/closed_chain_kin.py` | numpy | `--selftest` |
+| 足端轨迹 trot 步态（全向） | `传统步态/代码/gait.py` | numpy, matplotlib | `--selftest` / `--demo` |
+| **MuJoCo 无 RL 行走** ⭐ | `传统步态/代码/walk_gait.py` | numpy, mujoco | `--sweep` |
+| 动力学 + 减速比选型 | `传统步态/代码/dynamics.py` | numpy, matplotlib | `--plot` |
+| 腿部串联近似 FK/IK（已退役） | `传统步态/代码/kinematics.py` | numpy | `--selftest` |
 | 域随机化 / 观测噪声 | `source/.../mos2026_2_closed_usd_env_cfg.py`（`EventCfg`）、`..._env.py` | Isaac Lab | 冒烟 √ |
 | 力矩惩罚奖励 | `source/.../custom_rewards.py` | Isaac Lab | — |
 | Policy 导出（TorchScript+ONNX） | `deploy/real/policy_export.py` | torch, onnx(可选 onnxruntime) | 数值一致性门 |
@@ -26,7 +28,12 @@
 
 ## 1. 腿部正/逆运动学（FK/IK）
 
-`deploy/common/kinematics.py`
+> ⭐ **2026-07-21 起改用精确闭链模型 `传统步态/代码/closed_chain_kin.py`**，并已在
+> MuJoCo 里 trot 走起来（达成率 88%，go2 基准 82%）。完整技术实现思路见
+> [闭链运动学与 MuJoCo 行走](./闭链运动学与MuJoCo行走.md)。下面的串联近似
+> （`kinematics.py`）已退役——它的 foot 长度是猜的、闭链传动比从未标定，实际无法部署。
+
+`传统步态/代码/kinematics.py`（已退役，保留作对照）
 
 每条腿抽象为标准 3-DOF 串联腿（与 Unitree/MIT-Cheetah 同构）：髋外摆 `q_ab`（绕 x）+
 大腿 `q_hip`（绕 y）+ 膝 `q_knee`（绕 y）。几何取自 `deploy/mujoco/assets/mos2026_2.xml`：
@@ -38,7 +45,7 @@ hip 外摆轴 FL/FR=−x、RL/RR=+x；俯仰轴 左腿=−y、右腿=+y。
   `knee_sign` 分支选择。
 
 ```bash
-.venv/bin/python deploy/common/kinematics.py --selftest
+.venv/bin/python 传统步态/代码/kinematics.py --selftest
 # 足端 FK(IK) 往返 1e-16；关节角往返 3e-15；零位 FK 与 XML 累计偏移精确一致
 ```
 
@@ -50,15 +57,15 @@ hip 外摆轴 FL/FR=−x、RL/RR=+x；俯仰轴 左腿=−y、右腿=+y。
 
 ## 2. 足端轨迹步态（trot）
 
-`deploy/common/gait.py`
+`传统步态/代码/gait.py`
 
 对角小跑：FL+RR 同相、FR+RL 反相。在**足端笛卡尔空间**规划——支撑相贴地直线 +
 摆动相**摆线（cycloid）抬腿**（离地/触地瞬间水平与竖直速度均为 0，少打滑），经 IK 转关节目标。
 
 ```bash
-.venv/bin/python deploy/common/gait.py --selftest          # 足端往返 1e-16、膝角 1.40<1.57 限位、对角相位正确
-.venv/bin/python deploy/common/gait.py --demo              # → outputs/gait_demo/ 关节曲线 + 足端轨迹 + CSV
-.venv/bin/python deploy/common/gait.py --linkage --leg fl  # 矢状面 2 连杆（大腿+小腿，髋固定）+ 足端轨迹
+.venv/bin/python 传统步态/代码/gait.py --selftest          # 足端往返 1e-16、膝角 1.40<1.57 限位、对角相位正确
+.venv/bin/python 传统步态/代码/gait.py --demo              # → 传统步态/图与数据/gait_demo/ 关节曲线 + 足端轨迹 + CSV
+.venv/bin/python 传统步态/代码/gait.py --linkage --leg fl  # 矢状面 2 连杆（大腿+小腿，髋固定）+ 足端轨迹
 ```
 
 产物（`outputs/` 已 gitignore，需本地生成）：
@@ -71,7 +78,7 @@ hip 外摆轴 FL/FR=−x、RL/RR=+x；俯仰轴 左腿=−y、右腿=+y。
 
 ## 2.5 机身速度 ↔ 电机角速度映射（speed_map）
 
-`deploy/common/speed_map.py` ｜ 可视化 `scripts/tools/speed_viz_isaac.py`
+`传统步态/代码/speed_map.py` ｜ 可视化 `scripts/tools/speed_viz_isaac.py`
 
 回答「四足要走 v m/s，每个电机得转多快？」。**核心：不是唯一对应**——同一机身速度，
 大步幅低步频（电机慢）或小步幅高步频（电机快）都能实现，步幅/占空比/步频是旋钮。
@@ -86,10 +93,10 @@ hip 外摆轴 FL/FR=−x、RL/RR=+x；俯仰轴 左腿=−y、右腿=+y。
 
 ```bash
 # 单点：3 m/s 需要多少电机转速 + 可行性 + 需要多大步幅才进限位
-.venv/bin/python deploy/common/speed_map.py --speed 3.0
+.venv/bin/python 传统步态/代码/speed_map.py --speed 3.0
 # 扫描出「机身速度→电机转速」曲线 + (速度×步幅)→峰值 设计图 + CSV
-.venv/bin/python deploy/common/speed_map.py --sweep      # → outputs/speed_map/
-.venv/bin/python deploy/common/speed_map.py --selftest
+.venv/bin/python 传统步态/代码/speed_map.py --sweep      # → 传统步态/图与数据/speed_map/
+.venv/bin/python 传统步态/代码/speed_map.py --selftest
 ```
 
 **关键结论**（步幅 10cm / β=0.5 默认 trot）：
@@ -122,7 +129,7 @@ trot 循环（运动学播放：关重力 + 步进物理解闭环），omni.ui �
 
 ## 3. 动力学 + 减速比选型
 
-`deploy/common/dynamics.py` ｜ 详见 [dynamics_gear_ratio_analysis.md](./dynamics_gear_ratio_analysis.md)
+`传统步态/代码/dynamics.py` ｜ 详见 [dynamics_gear_ratio_analysis.md](./dynamics_gear_ratio_analysis.md)
 
 - 连杆受力：矢状面静力 Newton-Euler 递推（足端地反力 → 小腿 → 大腿 → 髋）。
 - 关节力矩需求：静立/trot/动态蹬地，**峰值 ≈ 12 N·m**。
@@ -130,7 +137,7 @@ trot 循环（运动学播放：关重力 + 步进物理解闭环），omni.ui �
 - 减速比寻优：可行带 [3.56, 10.66]，**余量平衡最优 N\*=6.16**。
 
 ```bash
-.venv/bin/python deploy/common/dynamics.py --plot   # → outputs/dynamics/{tn_envelope,gear_margin}.png
+.venv/bin/python 传统步态/代码/dynamics.py --plot   # → 传统步态/图与数据/dynamics/{tn_envelope,gear_margin}.png
 ```
 
 **核心结论**：现减速比 **6.33 已接近最优**；真机「力矩/电流不足」根因**不是减速比**，

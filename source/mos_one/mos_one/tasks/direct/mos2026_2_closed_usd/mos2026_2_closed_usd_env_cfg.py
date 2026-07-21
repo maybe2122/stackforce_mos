@@ -348,7 +348,7 @@ class Mos20262ClosedUsdEnvCfg(DirectRLEnvCfg):
                 # sim2real 工作验证过；更准的值待真机系统辨识后替换。
                 armature=0.01,
                 # GO-M8010-6 电机：最大扭矩 23.7 N·m，最大转速 30 rad/s（24V 供电）。
-                # 2026-06-12 起 effort 从 12 上调到 16（doc/dynamics_gear_ratio_analysis.md
+                # 2026-06-12 起 effort 从 12 上调到 16（传统步态/文档/dynamics_gear_ratio_analysis.md
                 # 行动项）：12 N·m 恰好卡在深蹲/动态蹬地的需求线上零余量，策略被迫
                 # 「贴上限硬走」；16 N·m（≤峰值 23.7）配合 reward_scales["torque"]
                 # 惩罚，让策略有余量但用力矩要付费。

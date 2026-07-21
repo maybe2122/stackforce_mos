@@ -18,7 +18,7 @@
 [训练参数](#-训练脚本参数) ·
 [播放结果](#-播放训练结果) ·
 [评估结果](#-评估训练结果) ·
-[步态评价](doc/步态评价指标.md) ·
+[步态评价](传统步态/文档/步态评价指标.md) ·
 [真机部署](deploy/real/README.md) ·
 [自定义奖励](#-自定义-reward)
 
@@ -38,7 +38,7 @@
 | 🔍 | [可视化调试关节驱动](#-可视化调试关节驱动) | 正弦步态肉眼检查 |
 | 🛠️ | [推荐环境 & 安装](#️-推荐环境--安装) | 已验证版本组合 · 一键安装 |
 | 🎬 | [播放训练结果](#-播放训练结果) | `play_latest.sh` · 手动选 checkpoint |
-| 📊 | [评估训练结果](#-评估训练结果) | [参数](#️-evalpy-参数) · [指标说明](#-指标说明) · [验证套件](#-一键验证套件) · [`doc/步态评价指标.md`](doc/步态评价指标.md) |
+| 📊 | [评估训练结果](#-评估训练结果) | [参数](#️-evalpy-参数) · [指标说明](#-指标说明) · [验证套件](#-一键验证套件) · [`传统步态/文档/步态评价指标.md`](传统步态/文档/步态评价指标.md) |
 | 🦿 | [控制栈](#-控制栈运动学--步态--动力学--sim2real) | FK/IK · 步态 · 动力学选型 · Sim2Real |
 | 📦 | [闭链 USD 注意事项](#-闭链-usd-注意事项) | 别走 URDF Converter · 移动目录后重装 |
 | 🏆 | [自定义 Reward](#-自定义-reward) | 实现 + 权重两步 |
@@ -214,7 +214,7 @@ source/stackforce_mos/                   # 🟥 改名残留(只剩 __pycache__,
   (反射转子惯量,取自 menagerie go2 同款执行器)。重训后用 `eval_plot.py` 验证
   `fl/rl/rr_shank` 的 ≥80% 力矩饱和与 CoT 4.5 是否缓解、蹦跳步态是否消失。
 - **步态整形奖励**：奖励表没有 feet air time / 抬脚高度项、`action_rate=-0.005` 过弱，
-  实测步态高频低抬腿（见 [`doc/步态评价指标.md`](doc/步态评价指标.md) 整改对照表）。
+  实测步态高频低抬腿（见 [`传统步态/文档/步态评价指标.md`](传统步态/文档/步态评价指标.md) 整改对照表）。
 - **可部署增益重训**：训练 kp=25/kd=0.5 vs 真机部署 ≈320/3.2（2026-07-04 MuJoCo 实测
   增益失配是硬阻塞，详见 `deploy/real/README.md` 修复记录）。
 - **域随机化放量训练**：`--domain_rand --obs_noise_std 0.02` 冒烟已过，跑收敛模型
@@ -241,7 +241,7 @@ source/stackforce_mos/                   # 🟥 改名残留(只剩 __pycache__,
   （此前 shank body 中心始终高于阈值，`foot_slip` 奖励从未生效、步态指标退化）。
   重训后可用 `eval.py --foot_contact_height` 扫描微调。
 - **足端 FK 替代 body 高度近似**：闭链 USD 无接触传感器，接触判定可改用
-  `deploy/common/kinematics.py` 的足端 FK，把打滑/占空比指标建立在真实足端上。
+  `传统步态/代码/kinematics.py` 的足端 FK，把打滑/占空比指标建立在真实足端上。
 - play/eval 与导出产物（`policy.pt`/`.onnx`）打通，做训练→部署的回归测试。
 
 </details>
@@ -289,7 +289,7 @@ FK/IK/Jacobian（往返误差 1e-16）、trot 步态生成器、动力学/减速
 自动推导），并支持**部署条件仿真**：`--lin-vel-source zero` / `--imu-source stub` 复刻
 真机受限观测、`--kp/--kv` 模拟部署增益、`--settle` 对齐站姿保持、`--action-lpf` 动作低通、
 `--slowmo` 慢放；headless / 关窗时输出**步态量化报告**（占空比/步频/抬脚/对角同步率，
-判读标准见 [`doc/步态评价指标.md`](doc/步态评价指标.md)）。`standup_torque.py` 做蹲→站
+判读标准见 [`传统步态/文档/步态评价指标.md`](传统步态/文档/步态评价指标.md)）。`standup_torque.py` 做蹲→站
 逐关节力矩/电机负载分析（图、CSV、慢放视频叠力矩条、SwanLab 实时上报）。
 
 > [!WARNING]
@@ -711,7 +711,7 @@ python scripts/rsl_rl/eval.py \
 
 > [!TIP]
 > 各步态指标的**健康区间与判读优先级**（对角同步率 → 步频 → 占空比 → 抬脚高度……）
-> 见 **[📄 doc/步态评价指标.md](doc/步态评价指标.md)**；MuJoCo 部署条件下的同款指标由
+> 见 **[📄 传统步态/文档/步态评价指标.md](传统步态/文档/步态评价指标.md)**；MuJoCo 部署条件下的同款指标由
 > `deploy/mujoco/play_mujoco.py` 的 `[gait]` 报告输出，两边对照可区分「策略问题」与「sim2sim 失配」。
 
 ### 🧪 一键验证套件
@@ -736,23 +736,23 @@ python scripts/rsl_rl/eval_report.py \
 ## 🦿 控制栈：运动学 / 步态 / 动力学 / Sim2Real
 
 > 纯 RL 端到端之外补齐的**经典运控层**与 **sim2real 必需项**——RL 上真机、传统控制
-> baseline、执行器选型的基础。完整说明见 **[📄 doc/control_stack.md](./doc/control_stack.md)**，
-> 动力学/选型见 **[📄 doc/dynamics_gear_ratio_analysis.md](./doc/dynamics_gear_ratio_analysis.md)**。
+> baseline、执行器选型的基础。完整说明见 **[📄 传统步态/文档/control_stack.md](./传统步态/文档/control_stack.md)**，
+> 动力学/选型见 **[📄 传统步态/文档/dynamics_gear_ratio_analysis.md](./传统步态/文档/dynamics_gear_ratio_analysis.md)**。
 
 | 模块 | 文件 | 一键验证 |
 |:---|:---|:---|
-| 🦵 腿部 FK/IK（解析，4 腿向量化） | `deploy/common/kinematics.py` | `--selftest`（往返 1e-16） |
-| 🐾 足端轨迹 trot 步态（摆线摆动 + IK） | `deploy/common/gait.py` | `--selftest` / `--demo` / `--linkage` |
-| ⚙️ 动力学 + 减速比选型 | `deploy/common/dynamics.py` | `--plot` |
+| 🦵 腿部 FK/IK（解析，4 腿向量化） | `传统步态/代码/kinematics.py` | `--selftest`（往返 1e-16） |
+| 🐾 足端轨迹 trot 步态（摆线摆动 + IK） | `传统步态/代码/gait.py` | `--selftest` / `--demo` / `--linkage` |
+| ⚙️ 动力学 + 减速比选型 | `传统步态/代码/dynamics.py` | `--plot` |
 | 🎲 域随机化 / 观测噪声 | `EventCfg` + `train.py --domain_rand` | env_isaaclab 冒烟 √ |
 | 🔋 力矩惩罚奖励（opt-in） | `custom_rewards.py` `sum(τ²)` | `reward_scales["torque"]` |
 | 📦 Policy 导出 TorchScript+ONNX | `deploy/real/policy_export.py` | 数值一致性门 `<1e-4` |
 
 ```bash
 # deploy/common/* 纯 numpy，无需 Isaac（用根目录 .venv）
-.venv/bin/python deploy/common/kinematics.py --selftest
-.venv/bin/python deploy/common/gait.py --demo          # → outputs/gait_demo/
-.venv/bin/python deploy/common/dynamics.py --plot      # → outputs/dynamics/
+.venv/bin/python 传统步态/代码/kinematics.py --selftest
+.venv/bin/python 传统步态/代码/gait.py --demo          # → 传统步态/图与数据/gait_demo/
+.venv/bin/python 传统步态/代码/dynamics.py --plot      # → 传统步态/图与数据/dynamics/
 ```
 
 > 💡 **减速比结论**：现用 6.33 已接近最优（余量平衡最优 N\*=6.16）；真机「力矩/电流不足」

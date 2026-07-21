@@ -11,7 +11,7 @@ adapts it programmatically for mjlab:
   - adds per-foot sites (FL/FR/RL/RR) at the shank tips, computed from the
     shank mesh's most distal vertex cluster (see doc/mjlab_integration.md).
 
-Actuator constants: GO-M8010-6, N=6.33 (see deploy/common/dynamics.py).
+Actuator constants: GO-M8010-6, N=6.33 (see 传统步态/代码/dynamics.py).
 PD gains + effort limit mirror the Isaac env (kp=25, kd=0.5, effort=12) so a
 policy trained here stays comparable with the Isaac baseline.
 """
@@ -107,7 +107,7 @@ def get_spec() -> mujoco.MjSpec:
 
 
 ##
-# Actuators — GO-M8010-6 @ N=6.33 (deploy/common/dynamics.py), gains/effort
+# Actuators — GO-M8010-6 @ N=6.33 (传统步态/代码/dynamics.py), gains/effort
 # aligned with the Isaac env (stiffness 25 / damping 0.5 / effort_limit_sim 12).
 ##
 

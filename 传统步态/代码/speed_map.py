@@ -14,10 +14,10 @@
         v_body = step_length / (duty · period)                         …(1)
    给定目标 v，固定 step_length/duty，反解 period（= 1/步频）。
 2. 足端速度剖面：对步态足端轨迹（支撑相贴地直线 + 摆动相摆线/(1−cos)）解析求导，
-   得髋系足端速度 foot_vel(t)。摆动相峰值前向足速 = 2·v_body·β/(1−β)（β=0.5 时 = 2v）。
+   得腿系足端速度 foot_vel(t)。摆动相峰值前向足速 = 2·v_body·β/(1−β)（β=0.5 时 = 2v）。
 3. 足端速度 → 关节角速度：经解析 Jacobian
         q_dot(t) = J(q(t))⁻¹ · foot_vel(t)                            …(2)
-   （`kinematics.leg_jacobian` / `leg_foot_vel_to_qdot`）。
+   （`closed_chain_kin.leg_jacobian`）。
 4. 关节 → 电机：直驱 + 行星减速，电机轴速 = 关节角速 × 减速比 N。
         ω_motor = N · q_dot,  N = 6.33                                …(3)
 
@@ -27,15 +27,15 @@
 - 训练 sim cap：`velocity_limit_sim = 15 rad/s`（env_cfg.py，sim2real 友好的软限）。
 峰值关节角速度超过它即「该步态在该速度不可行」，需要加大步幅/降步频。
 
-⚠️ 膝是平行四连杆闭链：本模块输出「等效膝关节」角速度 q_knee_dot；shank 电机轴看到
-的 ≈ 该值 × 连杆传动比（≈1，未标定，见 kinematics.py 文首与 todo §E）。hip/thigh
-为直驱，映射干净。
+闭链传动（2026-07-21 起已解决）：本模块改用 `closed_chain_kin`，Jacobian 直接建在
+真实四杆机构上，输出的第三列就是 **shank_link 曲柄电机**自己的角速度，不再是
+「等效膝角」加一个未标定的传动比。三个关节都是直驱，映射干净。
 
 运行：
-  python deploy/common/speed_map.py --speed 3.0      # 单点：3 m/s 需要多少电机转速 + 可行性
-  python deploy/common/speed_map.py --speed 1.0 --step-length 0.18
-  python deploy/common/speed_map.py --sweep          # 机身速度→电机转速 曲线 + CSV → outputs/speed_map/
-  python deploy/common/speed_map.py --selftest
+  python 传统步态/代码/speed_map.py --speed 3.0      # 单点：3 m/s 需要多少电机转速 + 可行性
+  python 传统步态/代码/speed_map.py --speed 1.0 --step-length 0.18
+  python 传统步态/代码/speed_map.py --sweep          # 机身速度→电机转速 曲线 + CSV → 传统步态/图与数据/speed_map/
+  python 传统步态/代码/speed_map.py --selftest
 """
 
 from __future__ import annotations
@@ -47,17 +47,17 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from kinematics import LEG_NAMES, LEGS, leg_jacobian, leg_ik
+from closed_chain_kin import LEG_NAMES, LEGS, leg_jacobian, leg_ik
 from gait import TrotGait
 
-# --- 传动 / 限位常量（取自 deploy/common/dynamics.py 与 env_cfg.py）---------------
+# --- 传动 / 限位常量（取自 传统步态/代码/dynamics.py 与 env_cfg.py）---------------
 GEAR = 6.33                 # 减速比：ω_motor = GEAR · ω_joint
 JOINT_VEL_TRAIN = 15.0      # 训练 sim 软限 velocity_limit_sim (rad/s, 关节侧)
 JOINT_VEL_PHYS = 30.0       # 电机物理空载上限 (rad/s, 关节侧)
 RAD_S_TO_RPM = 60.0 / (2.0 * math.pi)
 
-# 约定角 (ab, hip, knee) 对应 sim 的三类驱动电机（仅作标签）
-JOINT_LABELS = ("hip(ab)", "thigh(hip)", "knee(shank)")
+# 三个受驱关节（闭链模型直接输出 MJCF/电机角，无「约定角」中间层）
+JOINT_LABELS = ("hip", "thigh", "crank(shank_link)")
 
 
 # ============================ 步态构造 ============================
@@ -95,35 +95,51 @@ def body_speed_of(gait: TrotGait) -> float:
 
 # ============================ 足端速度（解析求导）============================
 def foot_vel_hip(gait: TrotGait, leg_name: str, t: float) -> np.ndarray:
-    """髋系足端速度 (vx, vy, vz) —— 对 gait.foot_target 解析求导。
+    """腿系足端速度 (vx, vy, vz) —— 对 gait.foot_target 解析求导。
 
-    支撑相：vx = −L/(β·T) = −v_body（足端向后=机身向前），vz=0。
-    摆动相：摆线 x、(1−cos) z 的导数。vy 恒 0（不做主动外摆）。
+    gait.foot_target 的水平部分是 (x, y) = (x0, y0) + (Lx, Ly)·f(相位)，
+    x/y 共用同一个归一化型线 f，所以这里只要对 f 求一次导再乘步向量即可，
+    转向/侧移（Ly≠0）自动带上。
+
+    支撑相：f = 0.5 − s, s = p/β  →  df/dt = −1/(β·T)
+            水平速度 = −(Lx,Ly)/(β·T)，前进时即 −v_body（足端向后=机身向前）。
+    摆动相：随 swing_profile 取摆线或三次多项式的导数。
+    竖直方向恒为 (1−cos) 抬腿的导数，与水平型线无关。
     """
-    leg = LEGS[leg_name]
-    T, L, h, beta = gait.period, gait.step_length, gait.step_height, gait.duty
+    T, h, beta = gait.period, gait.step_height, gait.duty
+    Lx, Ly = gait.step_vec(leg_name)
     p = (t / T + gait.phase_offset[leg_name]) % 1.0
-    if p < beta:  # 支撑相：x = x0 + L(0.5 − s), s = (t/T)/β → dx/dt = −L/(β·T)
-        vx = -L / (beta * T)
+
+    if p < beta:                      # 支撑相
+        df_dt = -1.0 / (beta * T)
         vz = 0.0
-    else:         # 摆动相：s = (p−β)/(1−β), ds/dt = 1/((1−β)·T)
+    else:                             # 摆动相
         s = (p - beta) / (1.0 - beta)
         ds_dt = 1.0 / ((1.0 - beta) * T)
-        # x = x0 + L(−0.5 + (s − sin(2πs)/(2π)))  → dx/ds = L(1 − cos(2πs))
-        vx = L * (1.0 - math.cos(2 * math.pi * s)) * ds_dt
+        if gait.swing_profile == "cycloid":
+            # f = −1/2 + s − sin(2πs)/(2π)  → df/ds = 1 − cos(2πs)
+            df_ds = 1.0 - math.cos(2 * math.pi * s)
+        elif gait.swing_profile == "matched":
+            # f = −1/2 − r·s + 3(1+r)s² − 2(1+r)s³ → df/ds = −r + 6(1+r)s − 6(1+r)s²
+            r = (1.0 - beta) / beta
+            df_ds = -r + 6.0 * (1.0 + r) * s - 6.0 * (1.0 + r) * s ** 2
+        else:
+            raise ValueError(f"未知 swing_profile: {gait.swing_profile!r}")
+        df_dt = df_ds * ds_dt
         # z = z0 + h(1 − cos(2πs))/2  → dz/ds = h·π·sin(2πs)
         vz = h * math.pi * math.sin(2 * math.pi * s) * ds_dt
-    return np.array([vx, 0.0, vz])
+
+    return np.array([Lx * df_dt, Ly * df_dt, vz])
 
 
 # ============================ 一个周期的运动学解算 ============================
 @dataclass
 class CycleResult:
     times: np.ndarray          # (n,)
-    q: np.ndarray              # (n,4,3) 约定角 [ab,hip,knee]×[fl,fr,rl,rr]
+    q: np.ndarray              # (n,4,3) 受驱角 [hip,thigh,crank]×[fl,fr,rl,rr]
     qd: np.ndarray             # (n,4,3) 关节角速度 rad/s
-    foot: np.ndarray           # (n,4,3) 髋系足端
-    foot_vel: np.ndarray       # (n,4,3) 髋系足端速度
+    foot: np.ndarray           # (n,4,3) 腿系足端
+    foot_vel: np.ndarray       # (n,4,3) 腿系足端速度
     motor_omega: np.ndarray    # (n,4,3) 电机轴角速度 rad/s = qd·GEAR
     v_body: float
     gait: TrotGait
@@ -144,7 +160,7 @@ def cycle_kinematics(gait: TrotGait, n: int = 400) -> CycleResult:
         for li, name in enumerate(LEG_NAMES):
             leg = LEGS[name]
             f = gait.foot_target(name, t)
-            a, hh, k = leg_ik(f, leg, frame="hip", knee_sign=-1.0)
+            a, hh, k, _ = leg_ik(f, leg, frame="leg")
             fv = foot_vel_hip(gait, name, t)
             J = leg_jacobian(a, hh, k, leg)
             # q_dot = J⁻¹ fv（奇异位形 pinv 兜底）
@@ -164,9 +180,9 @@ def cycle_kinematics(gait: TrotGait, n: int = 400) -> CycleResult:
 
 
 def instant(gait: TrotGait, t: float) -> tuple[np.ndarray, np.ndarray]:
-    """单时刻 4 腿约定角与关节角速度（供实时可视化逐帧调用）。
+    """单时刻 4 腿受驱角与关节角速度（供实时可视化逐帧调用）。
 
-    返回 q (4,3) 与 qd (4,3)，列 = (q_ab, q_hip, q_knee)，行 = (fl,fr,rl,rr)。
+    返回 q (4,3) 与 qd (4,3)，列 = (θ_hip, θ_thigh, θ_crank)，行 = (fl,fr,rl,rr)。
     电机轴角速度 = qd · GEAR。
     """
     q = np.zeros((4, 3))
@@ -174,7 +190,7 @@ def instant(gait: TrotGait, t: float) -> tuple[np.ndarray, np.ndarray]:
     for li, name in enumerate(LEG_NAMES):
         leg = LEGS[name]
         f = gait.foot_target(name, t)
-        a, hh, k = leg_ik(f, leg, frame="hip", knee_sign=-1.0)
+        a, hh, k, _ = leg_ik(f, leg, frame="leg")
         fv = foot_vel_hip(gait, name, t)
         J = leg_jacobian(a, hh, k, leg)
         try:
@@ -255,7 +271,7 @@ def query(v_body: float, *, step_length=0.10, duty=0.5, step_height=0.04,
         print(f"  摆动相峰值前向足速 ≈ 2·v·β/(1−β) = {2*v_body*duty/(1-duty):.2f} m/s")
         print()
         print("每关节峰值 / RMS 角速度（关节侧 rad/s；电机轴 = ×{:.2f}）：".format(GEAR))
-        print(f"  {'leg':<4} {'hip(ab)':>22} {'thigh(hip)':>22} {'knee(shank)':>22}")
+        print(f"  {'leg':<4} {'hip':>22} {'thigh':>22} {'crank(shank_link)':>22}")
         for li, name in enumerate(LEG_NAMES):
             cells = []
             for ji in range(3):
@@ -288,8 +304,8 @@ def query(v_body: float, *, step_length=0.10, duty=0.5, step_height=0.04,
 
 # ============================ 速度扫描 + 出图 ============================
 def _out_dir() -> str:
-    d = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                     "outputs", "speed_map")
+    d = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                     "图与数据", "speed_map")
     os.makedirs(d, exist_ok=True)
     return d
 
