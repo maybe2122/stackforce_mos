@@ -44,6 +44,8 @@ $PY 传统步态/代码/dynamics.py --plot
   从 USD 拿长度、闭链 FK/IK 推导、步态、控制环、调参实录、测试步骤（编号分步）。
 - [文档/control_stack.md](文档/control_stack.md) —— 控制栈总览。
 - [文档/dynamics_gear_ratio_analysis.md](文档/dynamics_gear_ratio_analysis.md) —— 动力学与减速比选型。
+- **[文档/真机部署-01-角度映射标定与吊空验证.md](文档/真机部署-01-角度映射标定与吊空验证.md)** ——
+  往真机搬的第一步方案（吊空、验证复用已有 `motor_bus` 映射，不下地）。
 
 ## 说明
 

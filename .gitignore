@@ -17,3 +17,12 @@ MUJOCO_LOG.TXT
 
 # Python 打包产物
 *.egg-info/
+
+# Python 虚拟环境
+.venv/
+
+# 训练日志
+*.log
+
+# SwanLab 本地日志
+swanlog_local/
